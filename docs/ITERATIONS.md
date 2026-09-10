@@ -30,3 +30,29 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 - [x] `Geography` context: `District`, `Facility` schemas + migrations — stripped of the erroneous per-user scoping described above; migrated cleanly and `mix test` passes (128 tests, 0 failures).
 
 **Status:** done — foundation (District, Facility, User with role/facility) and auth are in, migrated, and tested. Role assignment has no UI or self-registration path yet; that's real remaining work, not part of this slice. Next up: Case Management (Iteration 1).
+
+---
+
+## Iteration 1 — Case Management (domain layer)
+
+**Goal:** the second architecturally-significant, high-risk slice the brief calls out (Disease Surveillance + Case Management, alongside the core domain model, as the two things Elaboration exists to prove out). Smallest useful cut: get a `Case` reported, persisted, and broadcast — not yet through Broadway/SMS, not yet consumed by Public Alerts or the Epidemiology Dashboard. Those are what actually close the report -> persist -> broadcast -> (alert + dashboard) loop that makes this project's MVP; this slice is the "persist" half, built and tested the same way Geography was in Iteration 0 before any UI touches it.
+
+**Decisions:**
+
+- One context, not two. The brief's module table lists **Disease Surveillance** (aggregation by facility/district/disease) and **Case Management** (individual case lifecycle) separately, but they'd both be queries and writes over the same `cases` table right now — no distinct schema or responsibility exists yet to justify splitting them (GRASP High Cohesion/Low Coupling cuts against two contexts fighting over one table). Built as `CaseManagement`, owning `Case` end to end; aggregation queries (`list_cases_by_facility/1` today, by-district/by-disease later) live here too. Revisit and split out `DiseaseSurveillance` if/when aggregation logic grows enough to earn its own boundary — not before.
+- `disease` is a plain `Ecto.Enum` on `Case` (`:cholera, :malaria, :typhoid, :covid19, :measles` — the five from the proposal), not a separate reference table. Same call as `role` on `User` in Iteration 0: no per-disease metadata need yet.
+- `status` (`:suspected, :confirmed, :resolved`) is also `Ecto.Enum`, defaulting to `:suspected`, but deliberately split into its own `status_changeset/2` separate from the general `changeset/2` — a case can't be created pre-confirmed or pre-resolved by accident. The changeset does *not* enforce that transitions only move forward (`:resolved` back to `:suspected` is allowed at the data layer) — there's no case-management screen yet to make a stricter rule meaningful, so it isn't guessed at. Revisit once one exists.
+- Contact tracing links (also named in the brief's Case Management scope) are deferred entirely — no schema, no field. No consumer for them yet, same reasoning as everything else deferred so far in this log.
+- `Case.facility_id`/`reported_by_id` are required, `on_delete: :restrict` (not `:nilify_all`, unlike `User.facility_id` in Iteration 0). A case is a historical record; a user's current facility is a profile detail that can safely go blank, but silently losing *which facility a case happened at* or *who reported it* would corrupt the audit trail. Deleting a facility or user with cases attached should fail loudly, not cascade or nilify.
+- No role check on `create_case/1` yet (every authenticated user can report a case, `reported_by_id` just has to reference a real user) — same "no authorization use case yet" call as Geography's writes in Iteration 0.
+
+**Built:**
+
+- [x] Migration: `cases` table (`disease`, `status`, `facility_id`, `reported_by_id`, indexed on all four).
+- [x] `CaseManagement` context + `Case` schema — `list_cases/0`, `list_cases_by_facility/1`, `get_case!/1`, `create_case/1`, `update_case_status/2`, `change_case/2`, `change_case_status/2`, PubSub broadcast (`"cases"` topic) on create/update.
+- [x] Fixtures + tests mirroring the Geography/Accounts pattern.
+- [ ] A LiveView to actually report and list cases (standing in for Broadway/SMS for now — see the MVP note in this iteration's goal).
+- [ ] Public Alerts subscriber (Oban job on case-report broadcast; mock/log delivery before real Africa's Talking sandbox wiring).
+- [ ] Epidemiology Dashboard subscriber (LiveView showing cases live as they're reported).
+
+**Status:** domain layer built, migration pending verification (`mix ecto.migrate` / `mix test` just run). The last three boxes are what actually turn this into something demoable — that's the next slice, not deferred scope creep.

@@ -1,0 +1,151 @@
+defmodule ZamHealthWatch.CaseManagement do
+  @moduledoc """
+  The CaseManagement context.
+
+  Owns the individual case record - who reported it, at which facility,
+  for which disease, and where it sits in its `:suspected` -> `:confirmed`
+  -> `:resolved` lifecycle (per the brief's "Case Management" module).
+  Aggregate views (case counts by district, trends over time - the
+  brief's "Disease Surveillance" module) are queries over this same
+  `cases` table, not a separate schema, so for now they live here too
+  rather than in a still-empty context split off before there's
+  anything distinct to split. Revisit if/when aggregation logic grows
+  enough to justify its own boundary.
+  """
+
+  import Ecto.Query, warn: false
+  alias ZamHealthWatch.Repo
+
+  alias ZamHealthWatch.CaseManagement.Case
+
+  @doc """
+  Subscribes to notifications about any case changes.
+
+  The broadcasted messages match the pattern:
+
+    * {:created, %Case{}}
+    * {:updated, %Case{}}
+
+  """
+  def subscribe_cases do
+    Phoenix.PubSub.subscribe(ZamHealthWatch.PubSub, "cases")
+  end
+
+  defp broadcast_case(message) do
+    Phoenix.PubSub.broadcast(ZamHealthWatch.PubSub, "cases", message)
+  end
+
+  @doc """
+  Returns the list of cases.
+
+  ## Examples
+
+      iex> list_cases()
+      [%Case{}, ...]
+
+  """
+  def list_cases do
+    Repo.all(Case)
+  end
+
+  @doc """
+  Returns the list of cases reported at a given facility.
+
+  ## Examples
+
+      iex> list_cases_by_facility(facility_id)
+      [%Case{}, ...]
+
+  """
+  def list_cases_by_facility(facility_id) do
+    Repo.all_by(Case, facility_id: facility_id)
+  end
+
+  @doc """
+  Gets a single case.
+
+  Raises `Ecto.NoResultsError` if the Case does not exist.
+
+  ## Examples
+
+      iex> get_case!(123)
+      %Case{}
+
+      iex> get_case!(456)
+      ** (Ecto.NoResultsError)
+
+  """
+  def get_case!(id), do: Repo.get!(Case, id)
+
+  @doc """
+  Reports a new case.
+
+  Always starts `:suspected` - see `Case.changeset/2`.
+
+  ## Examples
+
+      iex> create_case(%{field: value})
+      {:ok, %Case{}}
+
+      iex> create_case(%{field: bad_value})
+      {:error, %Ecto.Changeset{}}
+
+  """
+  def create_case(attrs) do
+    with {:ok, case = %Case{}} <-
+           %Case{}
+           |> Case.changeset(attrs)
+           |> Repo.insert() do
+      broadcast_case({:created, case})
+      {:ok, case}
+    end
+  end
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for tracking case changes.
+
+  ## Examples
+
+      iex> change_case(case)
+      %Ecto.Changeset{data: %Case{}}
+
+  """
+  def change_case(%Case{} = case, attrs \\ %{}) do
+    Case.changeset(case, attrs)
+  end
+
+  @doc """
+  Moves a case through its lifecycle (`:suspected` -> `:confirmed` -> `:resolved`).
+
+  ## Examples
+
+      iex> update_case_status(case, %{status: :confirmed})
+      {:ok, %Case{}}
+
+      iex> update_case_status(case, %{status: :bad_status})
+      {:error, %Ecto.Changeset{}}
+
+  """
+  def update_case_status(%Case{} = case, attrs) do
+    with {:ok, case = %Case{}} <-
+           case
+           |> Case.status_changeset(attrs)
+           |> Repo.update() do
+      broadcast_case({:updated, case})
+      {:ok, case}
+    end
+  end
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for tracking a case's status change.
+
+  ## Examples
+
+      iex> change_case_status(case)
+      %Ecto.Changeset{data: %Case{}}
+
+  """
+  def change_case_status(%Case{} = case, attrs \\ %{}) do
+    Case.status_changeset(case, attrs)
+  end
+end
