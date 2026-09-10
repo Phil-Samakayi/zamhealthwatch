@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 650" role="img" aria-labelledby="zhw-arch-title zhw-arch-desc">
+  <title id="zhw-arch-title">ZamHealthWatch real-time case-report flow</title>
+  <desc id="zhw-arch-desc">A case report from a health worker over SMS/USSD is ingested by Broadway, written by the Disease Surveillance context to Postgres/PostGIS, then broadcast over Phoenix PubSub to two independent subscribers: Public Alerts, which enqueues an Oban job that sends an SMS back out to the community, and the Epidemiology Dashboard LiveView, which pushes a live update to any connected browser on the same socket — no REST polling layer in between.</desc>
+
+  <rect x="0" y="0" width="940" height="650" fill="#ffffff"/>
+
+  <defs>
+    <marker id="arrowDark" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1e293b"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <!-- Health Worker (actor) -->
+  <rect x="360" y="15" width="200" height="50" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="460" y="36" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Health Worker</text>
+  <text x="460" y="53" text-anchor="middle" font-size="11" fill="#64748b">SMS / USSD</text>
+
+  <line x1="460" y1="65" x2="460" y2="113" stroke="#1e293b" stroke-width="1.5" marker-end="url(#arrowDark)"/>
+  <text x="470" y="93" font-size="11" fill="#334155">sends case report</text>
+
+  <!-- Broadway ingestion -->
+  <rect x="360" y="115" width="200" height="50" rx="8" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="460" y="136" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Broadway</text>
+  <text x="460" y="153" text-anchor="middle" font-size="11" fill="#475569">ingestion pipeline</text>
+
+  <line x1="460" y1="165" x2="460" y2="223" stroke="#1e293b" stroke-width="1.5" marker-end="url(#arrowDark)"/>
+  <text x="470" y="198" font-size="11" fill="#334155">validates, hands off</text>
+
+  <!-- Disease Surveillance -->
+  <rect x="360" y="225" width="200" height="50" rx="8" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="460" y="246" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Disease Surveillance</text>
+  <text x="460" y="263" text-anchor="middle" font-size="11" fill="#475569">Phoenix context</text>
+
+  <!-- Postgres + PostGIS -->
+  <line x1="560" y1="250" x2="663" y2="250" stroke="#1e293b" stroke-width="1.5" marker-end="url(#arrowDark)"/>
+  <text x="565" y="240" font-size="11" fill="#334155">persists</text>
+  <rect x="665" y="222" width="195" height="56" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="1.5"/>
+  <text x="762" y="245" text-anchor="middle" font-size="13" font-weight="600" fill="#312e81">Postgres + PostGIS</text>
+  <text x="762" y="262" text-anchor="middle" font-size="11" fill="#4338ca">shared data layer</text>
+
+  <!-- PubSub stem + fork -->
+  <line x1="460" y1="275" x2="460" y2="318" stroke="#2563eb" stroke-width="2"/>
+  <text x="470" y="300" font-size="11" font-weight="600" fill="#2563eb">PubSub broadcast: case_reported</text>
+  <circle cx="460" cy="320" r="4" fill="#2563eb"/>
+
+  <line x1="456" y1="323" x2="240" y2="363" stroke="#2563eb" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <line x1="464" y1="323" x2="690" y2="363" stroke="#2563eb" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+  <!-- Public Alerts -->
+  <rect x="120" y="365" width="200" height="50" rx="8" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="220" y="386" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Public Alerts</text>
+  <text x="220" y="403" text-anchor="middle" font-size="11" fill="#475569">Phoenix context (subscriber)</text>
+
+  <!-- Epidemiology Dashboard -->
+  <rect x="600" y="365" width="200" height="50" rx="8" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="700" y="386" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Epidemiology Dashboard</text>
+  <text x="700" y="403" text-anchor="middle" font-size="11" fill="#475569">LiveView (subscriber)</text>
+
+  <line x1="220" y1="415" x2="220" y2="463" stroke="#1e293b" stroke-width="1.5" marker-end="url(#arrowDark)"/>
+  <text x="230" y="443" font-size="11" fill="#334155">enqueues</text>
+
+  <line x1="700" y1="415" x2="700" y2="463" stroke="#1e293b" stroke-width="1.5" marker-end="url(#arrowDark)"/>
+  <text x="710" y="443" font-size="11" fill="#334155">pushes update</text>
+  <text x="710" y="456" font-size="10" fill="#64748b">(same socket, no polling)</text>
+
+  <!-- Oban -->
+  <rect x="120" y="465" width="200" height="50" rx="8" fill="#ffffff" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="220" y="486" text-anchor="middle" font-size="13" font-weight="600" fill="#0f172a">Oban</text>
+  <text x="220" y="503" text-anchor="middle" font-size="11" fill="#475569">background job queue</text>
+
+  <!-- Browser (actor) -->
+  <rect x="600" y="465" width="200" height="50" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="700" y="486" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Browser</text>
+  <text x="700" y="503" text-anchor="middle" font-size="11" fill="#64748b">dashboard viewer</text>
+
+  <line x1="220" y1="515" x2="220" y2="563" stroke="#1e293b" stroke-width="1.5" marker-end="url(#arrowDark)"/>
+  <text x="230" y="536" font-size="11" fill="#334155">sends SMS via</text>
+  <text x="230" y="549" font-size="11" fill="#334155">Africa's Talking</text>
+
+  <!-- Community (actor) -->
+  <rect x="120" y="565" width="200" height="50" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="220" y="586" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Community</text>
+  <text x="220" y="603" text-anchor="middle" font-size="11" fill="#64748b">SMS / USSD</text>
+</svg>

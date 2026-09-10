@@ -4,6 +4,10 @@ A Public Health Intelligence Platform for Zambia — personal portfolio project,
 
 Started life as a Final Year Project proposal (see `docs/archive/`), then reframed as a broader modular platform once it stopped being an academic deliverable and became something meant to actually solve a problem. The full current spec lives in [`docs/ZamHealthWatch_Project_Brief.md`](docs/ZamHealthWatch_Project_Brief.md) — read that first.
 
+![A case report from a health worker over SMS/USSD flows through Broadway into the Disease Surveillance context, which persists it to Postgres/PostGIS and broadcasts a PubSub event to two independent subscribers: Public Alerts, which enqueues an Oban job to text the community back, and the Epidemiology Dashboard LiveView, which pushes a live update straight to any connected browser — no REST polling layer in either direction.](docs/architecture.svg)
+
+*The mechanism this architecture is actually betting on: one PubSub broadcast reaching both the outbound alert pipeline and the live dashboard, in place of a separate REST API plus client-side polling.*
+
 ## Modules
 
 Disease Surveillance · Case Management · Laboratory Reporting · Vaccination Monitoring · Drug Availability · Hospital Capacity · Public Alerts · Health Worker Portal · Epidemiology Dashboard · Predictive Analytics · GIS Mapping · National Reporting
