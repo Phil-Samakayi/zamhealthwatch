@@ -50,6 +50,18 @@ config :phoenix_live_view,
 # at the `config/runtime.exs`.
 config :zamhealthwatch, ZamHealthWatch.Mailer, adapter: Swoosh.Adapters.Local
 
+# Configure Oban - runs the Public Alerts delivery queue (see
+# ZamHealthWatch.PublicAlerts). One queue is enough for now; split it up
+# if/when a second kind of background job needs its own concurrency limit.
+config :zamhealthwatch, Oban,
+  repo: ZamHealthWatch.Repo,
+  plugins: [{Oban.Plugins.Pruner, max_age: :timer.hours(24 * 7)}],
+  queues: [alerts: 10]
+
+# Whether ZamHealthWatch.PublicAlerts.Subscriber starts automatically with
+# the app. On in dev/prod; off in test - see config/test.exs for why.
+config :zamhealthwatch, :start_public_alerts_subscriber, true
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

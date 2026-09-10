@@ -26,6 +26,21 @@ config :zamhealthwatch, ZamHealthWatchWeb.Endpoint,
 # In test we don't send emails
 config :zamhealthwatch, ZamHealthWatch.Mailer, adapter: Swoosh.Adapters.Test
 
+# Oban's own recommended test config: jobs are inserted (so
+# Oban.Testing.assert_enqueued/2 can see them) but never actually run by a
+# queue processor.
+config :zamhealthwatch, Oban, testing: :manual
+
+# ZamHealthWatch.PublicAlerts.Subscriber is a permanent, globally-named
+# GenServer. Left running during tests, it would react to every case any
+# test creates (from any process, any sandboxed connection) and try to
+# write an Oban job through a Repo connection it was never allowed into -
+# random DBConnection.OwnershipError crashes across the whole async suite,
+# not just this feature's own tests. Off by default here; tests that want
+# to exercise it start their own instance with start_supervised!/1 and
+# explicitly Sandbox.allow/3 it into that one test's connection instead.
+config :zamhealthwatch, :start_public_alerts_subscriber, false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 
