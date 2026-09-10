@@ -10,6 +10,8 @@ defmodule ZamHealthWatch.Accounts.User do
     field :hashed_password, :string, redact: true
     field :confirmed_at, :utc_datetime
     field :authenticated_at, :utc_datetime, virtual: true
+    field :role, Ecto.Enum, values: [:health_worker, :district_officer, :moh_admin]
+    field :facility_id, :binary_id
 
     timestamps(type: :utc_datetime)
   end
@@ -112,6 +114,26 @@ defmodule ZamHealthWatch.Accounts.User do
   def confirm_changeset(user) do
     now = DateTime.utc_now(:second)
     change(user, confirmed_at: now)
+  end
+
+  @doc """
+  A user changeset for assigning a role and (optionally) a facility.
+
+  `facility_id` is deliberately not in `validate_required/2` — health
+  workers belong to a facility, but district- and national-level users
+  (`:district_officer`, `:moh_admin`) legitimately don't and shouldn't be
+  forced into one that doesn't fit. Whether a given role *requires* a
+  facility is a rule this context doesn't own yet; there's no use case
+  for it until real role-based behavior shows up, so it isn't guessed at
+  here. `facility_id` is checked against `Geography.Facility` via
+  `foreign_key_constraint/2` rather than by reaching into that schema
+  directly, keeping the two contexts decoupled per the Iteration 0 design.
+  """
+  def role_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:role, :facility_id])
+    |> validate_required([:role])
+    |> foreign_key_constraint(:facility_id)
   end
 
   @doc """

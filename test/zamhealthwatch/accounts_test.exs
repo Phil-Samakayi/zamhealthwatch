@@ -87,6 +87,55 @@ defmodule ZamHealthWatch.AccountsTest do
     end
   end
 
+  describe "change_user_role/2" do
+    test "returns a user changeset" do
+      assert %Ecto.Changeset{} = changeset = Accounts.change_user_role(%User{})
+      assert changeset.required == [:role]
+    end
+  end
+
+  describe "assign_user_role/2" do
+    test "requires role to be set" do
+      user = user_fixture()
+      {:error, changeset} = Accounts.assign_user_role(user, %{})
+      assert %{role: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "rejects a role outside the enum" do
+      user = user_fixture()
+      {:error, changeset} = Accounts.assign_user_role(user, %{role: :bad_role})
+      assert %{role: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "assigns a role without requiring a facility" do
+      user = user_fixture()
+      assert {:ok, %User{} = user} = Accounts.assign_user_role(user, %{role: :moh_admin})
+      assert user.role == :moh_admin
+      assert is_nil(user.facility_id)
+    end
+
+    test "assigns a role and a facility together" do
+      user = user_fixture()
+      facility = ZamHealthWatch.GeographyFixtures.facility_fixture()
+
+      assert {:ok, %User{} = user} =
+               Accounts.assign_user_role(user, %{role: :health_worker, facility_id: facility.id})
+
+      assert user.role == :health_worker
+      assert user.facility_id == facility.id
+    end
+
+    test "rejects a facility_id that doesn't reference a real facility" do
+      user = user_fixture()
+      bad_id = Ecto.UUID.generate()
+
+      assert {:error, changeset} =
+               Accounts.assign_user_role(user, %{role: :health_worker, facility_id: bad_id})
+
+      assert %{facility_id: ["does not exist"]} = errors_on(changeset)
+    end
+  end
+
   describe "sudo_mode?/2" do
     test "validates the authenticated_at time" do
       now = DateTime.utc_now()

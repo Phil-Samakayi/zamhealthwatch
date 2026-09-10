@@ -80,6 +80,39 @@ defmodule ZamHealthWatch.Accounts do
     |> Repo.insert()
   end
 
+  ## Role assignment
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for assigning a user's role and facility.
+
+  ## Examples
+
+      iex> change_user_role(user)
+      %Ecto.Changeset{data: %User{}}
+
+  """
+  def change_user_role(user, attrs \\ %{}) do
+    User.role_changeset(user, attrs)
+  end
+
+  @doc """
+  Assigns a role (and optionally a facility) to a user.
+
+  ## Examples
+
+      iex> assign_user_role(user, %{role: :district_officer})
+      {:ok, %User{}}
+
+      iex> assign_user_role(user, %{role: :bad_role})
+      {:error, %Ecto.Changeset{}}
+
+  """
+  def assign_user_role(user, attrs) do
+    user
+    |> User.role_changeset(attrs)
+    |> Repo.update()
+  end
+
   ## Settings
 
   @doc """

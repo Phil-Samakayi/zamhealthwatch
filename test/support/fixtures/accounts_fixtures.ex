@@ -57,6 +57,11 @@ defmodule ZamHealthWatch.AccountsFixtures do
     user
   end
 
+  def set_role(user, role, facility_id \\ nil) do
+    {:ok, user} = Accounts.assign_user_role(user, %{role: role, facility_id: facility_id})
+    user
+  end
+
   def extract_user_token(fun) do
     {:ok, captured_email} = fun.(&"[TOKEN]#{&1}[TOKEN]")
     [_, token | _] = String.split(captured_email.text_body, "[TOKEN]")
