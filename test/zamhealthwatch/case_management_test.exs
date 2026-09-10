@@ -90,4 +90,56 @@ defmodule ZamHealthWatch.CaseManagementTest do
       assert %Ecto.Changeset{} = CaseManagement.change_case_status(case)
     end
   end
+
+  describe "epidemiology aggregates" do
+    import ZamHealthWatch.CaseManagementFixtures
+    import ZamHealthWatch.GeographyFixtures
+
+    test "count_cases/0 returns 0 with no cases" do
+      assert CaseManagement.count_cases() == 0
+    end
+
+    test "count_cases/0 counts all reported cases" do
+      case_fixture()
+      case_fixture()
+
+      assert CaseManagement.count_cases() == 2
+    end
+
+    test "count_cases_by_disease/0 groups counts by disease, omitting diseases with none" do
+      case_fixture(%{disease: :cholera})
+      case_fixture(%{disease: :cholera})
+      case_fixture(%{disease: :malaria})
+
+      assert CaseManagement.count_cases_by_disease() == %{cholera: 2, malaria: 1}
+    end
+
+    test "count_cases_by_disease/0 returns an empty map with no cases" do
+      assert CaseManagement.count_cases_by_disease() == %{}
+    end
+
+    test "count_cases_by_status/0 groups counts by status, omitting statuses with none" do
+      suspected_case = case_fixture()
+      confirmed_case = case_fixture()
+      {:ok, _} = CaseManagement.update_case_status(confirmed_case, %{status: :confirmed})
+      _still_suspected = suspected_case
+
+      assert CaseManagement.count_cases_by_status() == %{suspected: 1, confirmed: 1}
+    end
+
+    test "count_cases_by_facility/0 groups counts by facility, omitting facilities with none" do
+      facility_a = facility_fixture(%{name: "Clinic A"})
+      facility_b = facility_fixture(%{name: "Clinic B"})
+      _empty_facility = facility_fixture(%{name: "Clinic C"})
+
+      case_fixture(%{facility_id: facility_a.id})
+      case_fixture(%{facility_id: facility_a.id})
+      case_fixture(%{facility_id: facility_b.id})
+
+      assert CaseManagement.count_cases_by_facility() == %{
+               facility_a.id => 2,
+               facility_b.id => 1
+             }
+    end
+  end
 end

@@ -152,4 +152,78 @@ defmodule ZamHealthWatch.CaseManagement do
   def change_case_status(%Case{} = case, attrs \\ %{}) do
     Case.status_changeset(case, attrs)
   end
+
+  @doc """
+  Returns the total number of reported cases.
+
+  ## Examples
+
+      iex> count_cases()
+      7
+
+  """
+  def count_cases do
+    Repo.aggregate(Case, :count, :id)
+  end
+
+  @doc """
+  Returns case counts grouped by disease, as `%{disease => count}`.
+
+  A disease with zero cases is simply absent from the map rather than
+  present with `0` - grouping by an `Ecto.Enum` field only ever produces
+  rows that actually exist. Zero-filling the full set of disease values
+  for display (so a dashboard can show every disease's tile even at
+  zero) is a presentation concern, left to the caller - same division
+  of labour as `list_facilities/0` staying name-only and `CaseLive.Index`
+  composing `facilities_by_id` on top of it.
+
+  ## Examples
+
+      iex> count_cases_by_disease()
+      %{cholera: 3, malaria: 1}
+
+  """
+  def count_cases_by_disease do
+    Repo.all(from c in Case, group_by: c.disease, select: {c.disease, count(c.id)})
+    |> Map.new()
+  end
+
+  @doc """
+  Returns case counts grouped by status, as `%{status => count}`.
+
+  Same zero-filling note as `count_cases_by_disease/0` applies.
+
+  ## Examples
+
+      iex> count_cases_by_status()
+      %{suspected: 2, confirmed: 1}
+
+  """
+  def count_cases_by_status do
+    Repo.all(from c in Case, group_by: c.status, select: {c.status, count(c.id)})
+    |> Map.new()
+  end
+
+  @doc """
+  Returns case counts grouped by facility, as `%{facility_id => count}`.
+
+  Facility *names* aren't joined in here - `CaseManagement` and
+  `Geography` are deliberately decoupled (no cross-context
+  associations), so a caller wanting names composes this map with
+  `Geography.list_facilities/0` in memory, same pattern as
+  `CaseLive.Index`'s `facilities_by_id`.
+
+  Only facilities with at least one case appear - there's no row to
+  group by for a facility with zero cases.
+
+  ## Examples
+
+      iex> count_cases_by_facility()
+      %{"facility-uuid" => 4}
+
+  """
+  def count_cases_by_facility do
+    Repo.all(from c in Case, group_by: c.facility_id, select: {c.facility_id, count(c.id)})
+    |> Map.new()
+  end
 end

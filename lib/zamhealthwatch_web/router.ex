@@ -60,6 +60,13 @@ defmodule ZamHealthWatchWeb.Router do
       # live_session rather than a new one (AGENTS.md: never duplicate
       # live_session names).
       live "/cases", CaseLive.Index, :index
+
+      # The epidemiology dashboard is an internal aggregate view of the
+      # same case data - no separate public-facing route/auth model exists
+      # yet (that's what the Public Alerts subscriber's SMS/mock delivery
+      # is for), so for this iteration it sits behind login too, in the
+      # same live_session as everything else that requires one.
+      live "/epidemiology", EpidemiologyLive.Index, :index
     end
 
     post "/users/update-password", UserSessionController, :update_password
