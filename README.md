@@ -20,7 +20,7 @@ Full rationale for each choice is in the project brief.
 
 ## Development approach
 
-Iterative and evolutionary, following the risk-driven / value-driven planning and GRASP responsibility-assignment ideas from Craig Larman's *Applying UML and Patterns*. No sprint backlog exists yet — the brief deliberately stops at Inception (vision, scope, architecture). Iteration planning is the next step, not yet part of this repo.
+Iterative and evolutionary, following the risk-driven / value-driven planning and GRASP responsibility-assignment ideas from Craig Larman's *Applying UML and Patterns*. [`docs/ITERATIONS.md`](docs/ITERATIONS.md) is the living build log — one entry per iteration, updated as it happens rather than written after the fact: goal, decisions made and why, what got built, current status.
 
 ## Dev environment
 
@@ -30,21 +30,20 @@ Installed and confirmed working:
 
 1. **Elixir 1.19.5 / Erlang OTP 28** — `elixir --version` to check.
 2. **PostgreSQL 18 + PostGIS 3.6.2** — via the [EnterpriseDB Windows installer](https://www.postgresql.org/download/windows/) + Stack Builder's PostGIS bundle under "Spatial Extensions." Confirmed with `psql -U postgres -c "SELECT * FROM pg_available_extensions WHERE name LIKE 'postgis%';"`.
-3. Still to run once, before the first `mix phx.new`: `mix local.hex && mix local.rebar && mix archive.install hex phx_new`.
+3. `mix local.hex && mix local.rebar && mix archive.install hex phx_new` — done; the Phoenix app itself is scaffolded (`mix phx.new . --app zamhealthwatch --module ZamHealthWatch --binary-id`) and boots.
 
 Port 4000 is what Phoenix will use once there's an app to run; Postgres listens on 5432 on `localhost`.
 
 **Shell prompt:** `scripts/activate.ps1` gives you a `(zamhealthwatch)` prompt prefix in PowerShell, the same visual cue Python's venv gives — dot-source it from the project root (`. .\scripts\activate.ps1`), `deactivate` to leave it. Purely cosmetic: Elixir doesn't need dependency isolation the way Python does (Mix already scopes each project's deps to its own `deps/`/`_build/`), so this is just so you can tell at a glance which project's shell you're in.
 
-No `mix phx.new` scaffold yet — the environment is ready, but starting the actual codebase is deliberately the next step, once iteration planning happens (see Development approach below).
-
 *(An earlier version of this repo included a Docker dev container under `.devcontainer/`/`docker-compose.yml`. Dropped in favor of the native setup above — if you still have those files locally, safe to delete.)*
 
 ## Status
 
-Pre-code. This repo currently holds project documentation and the dev environment only.
+**Iteration 0 in progress** — core domain model (District, Facility, User + role) and auth. See [`docs/ITERATIONS.md`](docs/ITERATIONS.md) for current detail. Phoenix scaffold is up and boots cleanly against Postgres/PostGIS; auth and the domain schemas are next.
 
 ## Docs
 
-- [`docs/ZamHealthWatch_Project_Brief.md`](docs/ZamHealthWatch_Project_Brief.md) — the live spec.
+- [`docs/ZamHealthWatch_Project_Brief.md`](docs/ZamHealthWatch_Project_Brief.md) — the live spec (vision, scope, architecture).
+- [`docs/ITERATIONS.md`](docs/ITERATIONS.md) — the build log, updated per iteration.
 - [`docs/archive/FYP_Proposal_Original.md`](docs/archive/FYP_Proposal_Original.md) — the original UNZA Final Year Project proposal this evolved from. Superseded; kept for history only.
