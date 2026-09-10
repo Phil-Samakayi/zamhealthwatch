@@ -36,7 +36,11 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Returns the list of cases.
+  Returns the list of cases, most recently reported first.
+
+  Ordered for the live case list (`CaseLive.Index`) - a plain `Repo.all/1`
+  has no defined order, and binary_id primary keys don't happen to sort
+  chronologically, so newest-first has to be explicit.
 
   ## Examples
 
@@ -45,7 +49,7 @@ defmodule ZamHealthWatch.CaseManagement do
 
   """
   def list_cases do
-    Repo.all(Case)
+    Repo.all(from c in Case, order_by: [desc: c.inserted_at])
   end
 
   @doc """

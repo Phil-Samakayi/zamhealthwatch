@@ -54,6 +54,12 @@ defmodule ZamHealthWatchWeb.Router do
       on_mount: [{ZamHealthWatchWeb.UserAuth, :require_authenticated}] do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
+
+      # Case reporting requires a logged-in user (reported_by_id is always
+      # the current user - see CaseLive.Index), so it belongs in this same
+      # live_session rather than a new one (AGENTS.md: never duplicate
+      # live_session names).
+      live "/cases", CaseLive.Index, :index
     end
 
     post "/users/update-password", UserSessionController, :update_password
