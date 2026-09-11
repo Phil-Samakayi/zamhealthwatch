@@ -125,6 +125,28 @@ defmodule ZamHealthWatch.GeographyTest do
       assert %{longitude: ["must be greater than or equal to -180"]} = errors_on(changeset)
     end
 
+    test "create_facility/1 accepts a valid district_id" do
+      district = district_fixture()
+      attrs = %{name: "some name", code: "SOME1", district_id: district.id}
+
+      assert {:ok, %Facility{} = facility} = Geography.create_facility(attrs)
+      assert facility.district_id == district.id
+    end
+
+    test "create_facility/1 rejects a district_id that doesn't reference a real district" do
+      attrs = %{name: "some name", code: "SOME1", district_id: Ecto.UUID.generate()}
+
+      assert {:error, changeset} = Geography.create_facility(attrs)
+      assert %{district_id: ["does not exist"]} = errors_on(changeset)
+    end
+
+    test "create_facility/1 without a district_id leaves it nil" do
+      assert {:ok, %Facility{} = facility} =
+               Geography.create_facility(%{name: "some name", code: "SOME1"})
+
+      assert facility.district_id == nil
+    end
+
     test "list_facilities_with_coordinates/0 only returns facilities with both lat and lng" do
       with_coords = facility_fixture(%{code: "WC1", latitude: -15.4, longitude: 28.3})
       _without_coords = facility_fixture(%{code: "NC1"})

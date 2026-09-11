@@ -32,14 +32,26 @@ defmodule ZamHealthWatch.Geography.Facility do
   what's still hand-entered demo seed data (see
   `MapLive.Index`/`Geography.list_facilities_with_coordinates/0` for
   where "has coordinates" actually matters).
+
+  `district_id` was a column on this schema from Iteration 0 but wasn't
+  castable here until now - Iteration 1's Epidemiology Dashboard
+  explicitly deferred by-district aggregation for exactly that reason
+  (see docs/ITERATIONS.md). Optional, like `latitude`/`longitude` and
+  for the same reason - no facility-management UI yet, so a facility
+  without a known district should still be creatable, it just won't
+  contribute to any district-level breakdown. Checked with
+  `foreign_key_constraint/2` rather than reaching into `District`
+  directly, same decoupling as `facility_id`/`reported_by_id` on
+  `CaseManagement.Case`.
   """
   def changeset(facility, attrs) do
     facility
-    |> cast(attrs, [:name, :code, :latitude, :longitude])
+    |> cast(attrs, [:name, :code, :latitude, :longitude, :district_id])
     |> validate_required([:name, :code])
     |> validate_format(:code, ~r/^[A-Z0-9]+$/, message: "must be uppercase letters/numbers only")
     |> unique_constraint(:code)
     |> validate_number(:latitude, greater_than_or_equal_to: -90, less_than_or_equal_to: 90)
     |> validate_number(:longitude, greater_than_or_equal_to: -180, less_than_or_equal_to: 180)
+    |> foreign_key_constraint(:district_id)
   end
 end

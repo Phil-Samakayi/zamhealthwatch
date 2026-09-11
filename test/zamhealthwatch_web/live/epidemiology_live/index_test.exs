@@ -17,7 +17,7 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.IndexTest do
       assert %{"error" => "You must log in to access this page."} = flash
     end
 
-    test "renders zeroed stats and an empty facility table with no cases", %{conn: conn} do
+    test "renders zeroed stats and empty facility/district tables with no cases", %{conn: conn} do
       {:ok, _lv, html} =
         conn
         |> log_in_user(user_fixture())
@@ -26,6 +26,7 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.IndexTest do
       assert html =~ "Epidemiology dashboard"
       assert html =~ "Total cases"
       assert html =~ "No cases reported yet."
+      assert html =~ "No cases at a facility with a known district yet."
     end
 
     test "shows totals broken down by disease, status, and facility", %{conn: conn} do
@@ -58,6 +59,56 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.IndexTest do
       assert html =~ "Clinic A"
       assert html =~ "Clinic B"
       refute html =~ "No cases reported yet."
+    end
+
+    test "shows totals broken down by district, summing across facilities in the same one", %{
+      conn: conn
+    } do
+      lusaka = district_fixture(%{name: "Lusaka"})
+      ndola = district_fixture(%{name: "Ndola"})
+
+      uth = facility_fixture(%{name: "UTH", district_id: lusaka.id})
+      kabwata = facility_fixture(%{name: "Kabwata Clinic", district_id: lusaka.id})
+      ndola_th = facility_fixture(%{name: "Ndola Teaching Hospital", district_id: ndola.id})
+
+      case_fixture(%{facility_id: uth.id})
+      case_fixture(%{facility_id: kabwata.id})
+      case_fixture(%{facility_id: ndola_th.id})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user_fixture())
+        |> live(~p"/epidemiology")
+
+      assert html =~ "Lusaka"
+      assert html =~ "Ndola"
+      refute html =~ "No cases at a facility with a known district yet."
+
+      # Lusaka (2 cases, from UTH + Kabwata Clinic) should be listed
+      # before Ndola (1 case) - busiest first, same ordering as by_facility.
+      assert html =~ ~r/Lusaka.*Ndola/s
+    end
+
+    test "does not fold a facility with no district into any district's total", %{conn: conn} do
+      lusaka = district_fixture(%{name: "Lusaka"})
+      uth = facility_fixture(%{name: "UTH", district_id: lusaka.id})
+      unmapped = facility_fixture(%{name: "Unmapped Clinic"})
+
+      case_fixture(%{facility_id: uth.id})
+      case_fixture(%{facility_id: unmapped.id})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user_fixture())
+        |> live(~p"/epidemiology")
+
+      # Both facilities have a case, so both legitimately appear in the
+      # by-facility table - it's only the by-district table that should
+      # never mention a district for the unmapped one, since it has none.
+      assert html =~ "UTH"
+      assert html =~ "Unmapped Clinic"
+      assert html =~ "Lusaka"
+      refute html =~ "No cases at a facility with a known district yet."
     end
 
     test "updates live when a new case is reported elsewhere", %{conn: conn} do
