@@ -172,6 +172,30 @@ defmodule ZamHealthWatch.Geography do
   end
 
   @doc """
+  Returns the list of facilities that have both a `latitude` and
+  `longitude` set.
+
+  Used by `MapLive.Index` - a facility with no known coordinates yet
+  (there's no facility-management UI, only seeds/fixtures create them)
+  simply doesn't appear on the map rather than plotting at `{0, 0}` or
+  erroring. Filtering "has coordinates" lives here (Information Expert:
+  `Geography` owns what a facility's location data means), not in the
+  LiveView.
+
+  ## Examples
+
+      iex> list_facilities_with_coordinates()
+      [%Facility{latitude: -15.4, longitude: 28.3}, ...]
+
+  """
+  def list_facilities_with_coordinates do
+    Repo.all(
+      from f in Facility,
+        where: not is_nil(f.latitude) and not is_nil(f.longitude)
+    )
+  end
+
+  @doc """
   Gets a single facility.
 
   Raises `Ecto.NoResultsError` if the Facility does not exist.

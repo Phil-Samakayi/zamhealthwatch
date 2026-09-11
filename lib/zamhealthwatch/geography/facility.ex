@@ -7,6 +7,8 @@ defmodule ZamHealthWatch.Geography.Facility do
   schema "facilities" do
     field :name, :string
     field :code, :string
+    field :latitude, :float
+    field :longitude, :float
     field :district_id, :binary_id
 
     timestamps(type: :utc_datetime)
@@ -21,12 +23,23 @@ defmodule ZamHealthWatch.Geography.Facility do
   consistent identity scheme rather than "has a code" being a special
   case. See docs/ITERATIONS.md, Iteration 2, for why this needed
   `mix ecto.reset` rather than a backfill migration.
+
+  `latitude`/`longitude` are plain floats, not required - a facility
+  can exist without known coordinates yet (there's still no
+  facility-management UI; only seeds/fixtures create them). Validated
+  as real-world coordinates when present, but not validated against
+  Zambia's actual bounds specifically - not worth the complexity for
+  what's still hand-entered demo seed data (see
+  `MapLive.Index`/`Geography.list_facilities_with_coordinates/0` for
+  where "has coordinates" actually matters).
   """
   def changeset(facility, attrs) do
     facility
-    |> cast(attrs, [:name, :code])
+    |> cast(attrs, [:name, :code, :latitude, :longitude])
     |> validate_required([:name, :code])
     |> validate_format(:code, ~r/^[A-Z0-9]+$/, message: "must be uppercase letters/numbers only")
     |> unique_constraint(:code)
+    |> validate_number(:latitude, greater_than_or_equal_to: -90, less_than_or_equal_to: 90)
+    |> validate_number(:longitude, greater_than_or_equal_to: -180, less_than_or_equal_to: 180)
   end
 end

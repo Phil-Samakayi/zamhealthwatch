@@ -76,6 +76,10 @@ defmodule ZamHealthWatchWeb.Router do
       # is for), so for this iteration it sits behind login too, in the
       # same live_session as everything else that requires one.
       live "/epidemiology", EpidemiologyLive.Index, :index
+
+      # Same reasoning as /epidemiology above - an internal view over
+      # the same case data, no separate public route/auth model yet.
+      live "/map", MapLive.Index, :index
     end
 
     post "/users/update-password", UserSessionController, :update_password

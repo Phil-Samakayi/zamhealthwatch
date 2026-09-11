@@ -103,6 +103,40 @@ defmodule ZamHealthWatch.GeographyTest do
       assert Geography.get_facility_by_code("NOPE") == nil
     end
 
+    test "create_facility/1 accepts valid coordinates" do
+      valid_attrs = %{name: "some name", code: "SOME1", latitude: -15.4, longitude: 28.3}
+
+      assert {:ok, %Facility{} = facility} = Geography.create_facility(valid_attrs)
+      assert facility.latitude == -15.4
+      assert facility.longitude == 28.3
+    end
+
+    test "create_facility/1 rejects an out-of-range latitude" do
+      attrs = %{name: "some name", code: "SOME1", latitude: 200.0, longitude: 28.3}
+
+      assert {:error, changeset} = Geography.create_facility(attrs)
+      assert %{latitude: ["must be less than or equal to 90"]} = errors_on(changeset)
+    end
+
+    test "create_facility/1 rejects an out-of-range longitude" do
+      attrs = %{name: "some name", code: "SOME1", latitude: -15.4, longitude: -200.0}
+
+      assert {:error, changeset} = Geography.create_facility(attrs)
+      assert %{longitude: ["must be greater than or equal to -180"]} = errors_on(changeset)
+    end
+
+    test "list_facilities_with_coordinates/0 only returns facilities with both lat and lng" do
+      with_coords = facility_fixture(%{code: "WC1", latitude: -15.4, longitude: 28.3})
+      _without_coords = facility_fixture(%{code: "NC1"})
+
+      assert Geography.list_facilities_with_coordinates() == [with_coords]
+    end
+
+    test "list_facilities_with_coordinates/0 returns an empty list when none have coordinates" do
+      facility_fixture(%{code: "NC2"})
+      assert Geography.list_facilities_with_coordinates() == []
+    end
+
     test "create_facility/1 with invalid data returns error changeset" do
       assert {:error, %Ecto.Changeset{}} = Geography.create_facility(@invalid_attrs)
     end
