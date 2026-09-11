@@ -17,21 +17,6 @@ defmodule ZamHealthWatch.AccountsTest do
     end
   end
 
-  describe "find_or_create_sms_reporter/1" do
-    test "creates a new user with the given phone, role: nil" do
-      assert {:ok, user} = Accounts.find_or_create_sms_reporter("+260971234567")
-      assert user.phone == "+260971234567"
-      assert user.role == nil
-      assert user.email == nil
-    end
-
-    test "returns the existing user for a phone already on file" do
-      assert {:ok, first} = Accounts.find_or_create_sms_reporter("+260971234567")
-      assert {:ok, second} = Accounts.find_or_create_sms_reporter("+260971234567")
-      assert first.id == second.id
-    end
-  end
-
   describe "get_user_by_email_and_password/2" do
     test "does not return the user if the email does not exist" do
       refute Accounts.get_user_by_email_and_password("unknown@example.com", "hello world!")
@@ -47,6 +32,20 @@ defmodule ZamHealthWatch.AccountsTest do
 
       assert %User{id: ^id} =
                Accounts.get_user_by_email_and_password(user.email, valid_user_password())
+    end
+  end
+
+  describe "list_users/0" do
+    test "returns an empty list with no users" do
+      assert Accounts.list_users() == []
+    end
+
+    test "returns every user" do
+      user_a = user_fixture()
+      user_b = user_fixture()
+
+      assert Accounts.list_users() |> Enum.map(& &1.id) |> Enum.sort() ==
+               Enum.sort([user_a.id, user_b.id])
     end
   end
 

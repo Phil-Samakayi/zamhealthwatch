@@ -6,6 +6,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.CaseManagementFixtures
 
+  alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.CaseManagement
 
   describe "Case list" do
@@ -41,6 +42,30 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       assert html =~ "Malaria"
       assert html =~ "Suspected"
       refute html =~ "No cases reported yet"
+    end
+
+    test "shows a web-registered reporter's email", %{conn: conn} do
+      reporter = user_fixture()
+      case_fixture(%{reported_by_id: reporter.id})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user_fixture())
+        |> live(~p"/cases")
+
+      assert html =~ reporter.email
+    end
+
+    test "shows an SMS-only reporter's phone number, not an email", %{conn: conn} do
+      {:ok, reporter} = Accounts.find_or_create_sms_reporter("+260971234567")
+      case_fixture(%{reported_by_id: reporter.id})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user_fixture())
+        |> live(~p"/cases")
+
+      assert html =~ "+260971234567"
     end
   end
 

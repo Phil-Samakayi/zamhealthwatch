@@ -1,6 +1,7 @@
 defmodule ZamHealthWatchWeb.CaseLive.Index do
   use ZamHealthWatchWeb, :live_view
 
+  alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
@@ -60,6 +61,9 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
         <:col :let={{_id, entry}} label="Facility">
           {Map.get(@facilities_by_id, entry.facility_id, "Unknown facility")}
         </:col>
+        <:col :let={{_id, entry}} label="Reported by">
+          {Map.get(@reporters_by_id, entry.reported_by_id, "Unknown reporter")}
+        </:col>
         <:col :let={{_id, entry}} label="Status">
           <span class={["badge", status_badge_class(entry.status)]}>
             {Phoenix.Naming.humanize(entry.status)}
@@ -93,6 +97,7 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
       |> assign(:disease_options, @disease_options)
       |> assign(:facility_options, Enum.map(facilities, &{&1.name, &1.id}))
       |> assign(:facilities_by_id, Map.new(facilities, &{&1.id, &1.name}))
+      |> assign(:reporters_by_id, Map.new(Accounts.list_users(), &{&1.id, reporter_label(&1)}))
       |> assign(:case_count, length(cases))
       |> assign_form(CaseManagement.change_case(%Case{}))
       |> stream(:cases, cases)
@@ -185,6 +190,17 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   defp status_badge_class(:suspected), do: "badge-warning"
   defp status_badge_class(:confirmed), do: "badge-error"
   defp status_badge_class(:resolved), do: "badge-success"
+
+  # Email for a web-registered reporter, phone for an SMS-only one
+  # (Iteration 2's SmsReporting slice made `email` nullable and gave an
+  # SMS reporter only a `phone` - see `Accounts.find_or_create_sms_reporter/1`).
+  # Falls back the same way `Map.get(@facilities_by_id, ..., "Unknown facility")`
+  # already does for a dangling reference, even though `reported_by_id` is a
+  # required, `on_delete: :restrict` FK (Iteration 1's audit-trail decision)
+  # and so should never actually be missing from `@reporters_by_id`.
+  defp reporter_label(%{email: email}) when is_binary(email), do: email
+  defp reporter_label(%{phone: phone}) when is_binary(phone), do: phone
+  defp reporter_label(_user), do: "Unknown reporter"
 
   # Mirrors CaseManagement.advance_case_status/2's own checks - shown
   # here purely to decide whether to render the button at all. The

@@ -61,6 +61,26 @@ defmodule ZamHealthWatch.Accounts do
   def get_user!(id), do: Repo.get!(User, id)
 
   @doc """
+  Returns the list of users.
+
+  Name-agnostic on purpose, same "context stays decoupled, caller
+  composes" split `Geography.list_facilities/0` already established -
+  a caller that wants a display label (e.g. `CaseLive.Index` attributing
+  a reported case to whoever reported it) builds that mapping itself
+  from whatever fields it needs (`email`, `phone`), rather than this
+  context guessing at a display format for every consumer.
+
+  ## Examples
+
+      iex> list_users()
+      [%User{}, ...]
+
+  """
+  def list_users do
+    Repo.all(User)
+  end
+
+  @doc """
   Finds the user with the given phone number, creating one if none
   exists yet.
 
