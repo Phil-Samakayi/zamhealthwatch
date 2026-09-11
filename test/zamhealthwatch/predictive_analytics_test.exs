@@ -1,10 +1,12 @@
 defmodule ZamHealthWatch.PredictiveAnalyticsTest do
   use ZamHealthWatch.DataCase
 
+  alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics
   alias ZamHealthWatch.PredictiveAnalytics.RiskScore
 
   import ZamHealthWatch.GeographyFixtures
+  import ZamHealthWatch.HospitalCapacityFixtures
 
   # A fixed reference point rather than DateTime.utc_now/0, so every
   # case below lands in a known, predictable one of the four weekly
@@ -74,6 +76,53 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
       assert [score] = PredictiveAnalytics.list_risk_scores(@now)
       assert score.weekly_counts == [0, 0, 0, 0]
       assert score.tier == :insufficient_data
+    end
+
+    test "returns a :no_data capacity_status for a facility with no capacity reports" do
+      facility_fixture()
+
+      assert [%RiskScore{capacity_status: :no_data}] = PredictiveAnalytics.list_risk_scores(@now)
+    end
+
+    test "surfaces a facility's latest capacity_status alongside its case-trend tier" do
+      facility = facility_fixture()
+
+      report =
+        capacity_report_fixture(%{
+          facility_id: facility.id,
+          total_beds: 100,
+          occupied_beds: 90
+        })
+
+      assert [score] = PredictiveAnalytics.list_risk_scores(@now)
+      assert score.capacity_status == CapacityReport.capacity_status(report)
+      assert score.capacity_status == :near_capacity
+    end
+
+    test "uses only the most recently reported capacity report per facility" do
+      facility = facility_fixture()
+
+      older =
+        capacity_report_fixture(%{
+          facility_id: facility.id,
+          total_beds: 100,
+          occupied_beds: 20
+        })
+
+      older
+      |> Ecto.Changeset.change(
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
+      )
+      |> ZamHealthWatch.Repo.update!()
+
+      capacity_report_fixture(%{
+        facility_id: facility.id,
+        total_beds: 100,
+        occupied_beds: 95
+      })
+
+      assert [score] = PredictiveAnalytics.list_risk_scores(@now)
+      assert score.capacity_status == :near_capacity
     end
   end
 

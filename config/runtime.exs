@@ -85,6 +85,33 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
+  # Real Africa's Talking SMS delivery, only when both credentials are
+  # present - unlike DATABASE_URL/SECRET_KEY_BASE above, a missing SMS
+  # provider doesn't `raise` here. SMS/USSD alerts and reply confirmations
+  # are a real but non-essential feature of this app (see
+  # ZamHealthWatch.SmsGateway.AfricasTalking's own moduledoc for the
+  # reasoning) - it's better for the app to boot in a degraded,
+  # log-only-delivery state than to refuse to start entirely over a
+  # missing SMS API key.
+  at_username = System.get_env("AFRICAS_TALKING_USERNAME")
+  at_api_key = System.get_env("AFRICAS_TALKING_API_KEY")
+
+  if at_username && at_api_key do
+    config :zamhealthwatch, :sms_gateway, ZamHealthWatch.SmsGateway.AfricasTalking
+
+    config :zamhealthwatch, ZamHealthWatch.SmsGateway.AfricasTalking,
+      username: at_username,
+      api_key: at_api_key,
+      sender_id: System.get_env("AFRICAS_TALKING_SENDER_ID")
+  else
+    require Logger
+
+    Logger.warning(
+      "AFRICAS_TALKING_USERNAME/AFRICAS_TALKING_API_KEY not set - " <>
+        "public alerts and SMS report replies will only be logged, not actually sent."
+    )
+  end
+
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key

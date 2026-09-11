@@ -54,6 +54,15 @@ config :zamhealthwatch, :start_public_alerts_subscriber, false
 # there's no one pid to allow individually.
 config :zamhealthwatch, :start_sms_reporting_pipeline, false
 
+# Points ZamHealthWatch.SmsGateway.AfricasTalking's Req calls at a
+# Req.Test stub instead of the real network - see that module's own
+# moduledoc. Only sms_gateway_test.exs actually exercises this module
+# (the default :sms_gateway is still SmsGateway.Logger everywhere in
+# :test - see config/config.exs); this option is simply inert for every
+# other test.
+config :zamhealthwatch, :sms_gateway_req_options,
+  plug: {Req.Test, ZamHealthWatch.SmsGateway.AfricasTalking}
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

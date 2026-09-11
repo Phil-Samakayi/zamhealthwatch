@@ -2,6 +2,9 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
   use ZamHealthWatchWeb, :live_view
 
   alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.CaseManagement.Case
+  alias ZamHealthWatch.HospitalCapacity
+  alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics
 
   @impl true
@@ -11,7 +14,7 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
       <.header>
         Outbreak risk
         <:subtitle>
-          A trend read on the last four weeks of reported cases per facility. Updates automatically as new cases come in.
+          A trend read on the last four weeks of reported cases per facility, alongside that facility's latest hospital capacity status. Updates automatically as new cases or capacity reports come in.
         </:subtitle>
       </.header>
 
@@ -34,6 +37,11 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
         <:col :let={score} label="Risk">
           <span class={["badge", tier_badge_class(score.tier)]}>{tier_label(score.tier)}</span>
         </:col>
+        <:col :let={score} label="Hospital capacity">
+          <span class={["badge", capacity_badge_class(score.capacity_status)]}>
+            {capacity_label(score.capacity_status)}
+          </span>
+        </:col>
       </.table>
     </Layouts.app>
     """
@@ -41,19 +49,28 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: CaseManagement.subscribe_cases()
+    if connected?(socket) do
+      CaseManagement.subscribe_cases()
+      HospitalCapacity.subscribe_capacity_reports()
+    end
 
     {:ok, assign_risk_scores(socket)}
   end
 
-  # Same "recompute everything on any case event" call already made for
-  # EpidemiologyLive.Index and MapLive.Index - case volume at this
-  # iteration doesn't justify incremental tracking, and a new case
-  # landing in a different weekly bucket than the last render is
-  # exactly the kind of thing a partial update would get wrong anyway.
+  # Same "recompute everything on any relevant event" call already made
+  # for EpidemiologyLive.Index and MapLive.Index - case/capacity volume
+  # at this iteration doesn't justify incremental tracking, and a new
+  # case landing in a different weekly bucket (or a new capacity report
+  # changing which one is "latest") than the last render is exactly the
+  # kind of thing a partial update would get wrong anyway. Matched on
+  # each event's own struct (`%Case{}`/`%CapacityReport{}`) rather than
+  # an unqualified `_case`/`_report`, so it's clear at a glance which
+  # topic's broadcast triggered the recompute, now that this LiveView
+  # subscribes to two.
   @impl true
-  def handle_info({:created, _case}, socket), do: {:noreply, assign_risk_scores(socket)}
-  def handle_info({:updated, _case}, socket), do: {:noreply, assign_risk_scores(socket)}
+  def handle_info({:created, %Case{}}, socket), do: {:noreply, assign_risk_scores(socket)}
+  def handle_info({:updated, %Case{}}, socket), do: {:noreply, assign_risk_scores(socket)}
+  def handle_info({:created, %CapacityReport{}}, socket), do: {:noreply, assign_risk_scores(socket)}
 
   defp assign_risk_scores(socket) do
     assign(socket, :risk_scores, PredictiveAnalytics.list_risk_scores())
@@ -66,4 +83,19 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
   defp tier_badge_class(:elevated), do: "badge-error"
   defp tier_badge_class(:stable), do: "badge-success"
   defp tier_badge_class(:insufficient_data), do: "badge-ghost"
+
+  # "No reports yet" rather than reusing `tier_label(:insufficient_data)`'s
+  # "No data" text - the two badges sit in adjacent columns on the same
+  # row and mean different things (no case history vs. no capacity
+  # submission), so sharing the exact wording risked reading as one
+  # signal instead of two independent ones.
+  defp capacity_label(:no_data), do: "No reports yet"
+  defp capacity_label(:adequate), do: "Adequate"
+  defp capacity_label(:near_capacity), do: "Near capacity"
+  defp capacity_label(:over_capacity), do: "Over capacity"
+
+  defp capacity_badge_class(:no_data), do: "badge-ghost"
+  defp capacity_badge_class(:adequate), do: "badge-success"
+  defp capacity_badge_class(:near_capacity), do: "badge-warning"
+  defp capacity_badge_class(:over_capacity), do: "badge-error"
 end

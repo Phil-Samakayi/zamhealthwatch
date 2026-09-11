@@ -24,9 +24,24 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   draws between Disease Surveillance and Predictive Analytics as
   separate modules. `CaseManagement` and `Geography` stay unaware this
   context exists, same decoupling as everywhere else in this project.
+
+  As of the Hospital Capacity integration, `list_risk_scores/1` also
+  attaches each facility's latest `HospitalCapacity.CapacityReport.capacity_status/1`
+  onto its `RiskScore` (see `RiskScore.capacity_status`) - `HospitalCapacity`
+  shares this context's per-facility grain (unlike `VaccinationMonitoring`'s
+  district-level one), so the lookup is a straightforward join in memory.
+  Deliberately **not** blended into `tier` itself: deciding how bed
+  strain should combine with a case-count trend into one number is a
+  real judgment call with no real use case behind it yet, so both
+  signals are surfaced side by side on `RiskLive.Index` rather than
+  merged into a formula this project would otherwise be guessing at.
+  `HospitalCapacity` still stays unaware this context exists - the
+  dependency runs one direction only, same as `CaseManagement`/
+  `Geography` above.
   """
 
-  alias ZamHealthWatch.{CaseManagement, Geography}
+  alias ZamHealthWatch.{CaseManagement, Geography, HospitalCapacity}
+  alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics.RiskScore
 
   @weeks 4
@@ -49,11 +64,13 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   """
   def list_risk_scores(now \\ DateTime.utc_now()) do
     buckets = weekly_buckets(now)
+    capacity_by_facility = HospitalCapacity.latest_capacity_by_facility()
 
     Geography.list_facilities()
     |> Enum.map(fn facility ->
       counts = Enum.map(buckets, &Map.get(&1, facility.id, 0))
-      build_score(facility, counts)
+      capacity_report = Map.get(capacity_by_facility, facility.id)
+      build_score(facility, counts, capacity_report)
     end)
     |> Enum.sort_by(& &1.recent_count, :desc)
   end
@@ -85,7 +102,7 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
     end
   end
 
-  defp build_score(facility, counts) do
+  defp build_score(facility, counts, capacity_report) do
     slope = trend_slope(counts)
 
     %RiskScore{
@@ -94,9 +111,18 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
       weekly_counts: counts,
       recent_count: List.last(counts),
       trend_slope: slope,
-      tier: tier_for(counts, slope)
+      tier: tier_for(counts, slope),
+      capacity_status: capacity_status_for(capacity_report)
     }
   end
+
+  # `nil` (no capacity report ever submitted for this facility) reads
+  # as `:no_data`, distinct from any of `CapacityReport.capacity_status/1`'s
+  # own values - same "absence isn't a guessed default" reasoning
+  # `HospitalCapacity.latest_capacity_by_facility/0` already applies at
+  # the query layer.
+  defp capacity_status_for(nil), do: :no_data
+  defp capacity_status_for(%CapacityReport{} = report), do: CapacityReport.capacity_status(report)
 
   # Least-squares slope of weekly case counts against week index
   # (0, 1, 2, ...) via Nx - the brief's "attempt Elixir-native first"

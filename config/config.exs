@@ -67,6 +67,13 @@ config :zamhealthwatch, :start_public_alerts_subscriber, true
 # dev/prod; off in test - see config/test.exs for why.
 config :zamhealthwatch, :start_sms_reporting_pipeline, true
 
+# The default SmsGateway implementation - logs instead of actually
+# sending. Overridden to ZamHealthWatch.SmsGateway.AfricasTalking only
+# in config/runtime.exs's prod block, and only when real Africa's
+# Talking credentials are present in the environment. Left as the
+# Logger stand-in in :dev and :test - see SmsGateway's own moduledoc.
+config :zamhealthwatch, :sms_gateway, ZamHealthWatch.SmsGateway.Logger
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

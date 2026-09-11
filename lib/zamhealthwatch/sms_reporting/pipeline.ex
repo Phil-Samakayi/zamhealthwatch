@@ -8,6 +8,12 @@ defmodule ZamHealthWatch.SmsReporting.Pipeline do
   `Producer`'s `handle_demand/2`) is what this iteration exists to
   prove, not batching. Revisit if/when real volume makes batched inserts
   worth it.
+
+  `handle_message/3` is also the one place that texts the reporter back
+  (`SmsReporting.confirmation_message/1` + `SmsGateway.send_sms/2`) -
+  it already has both `report_from_sms/2`'s result and the reporter's
+  own `from` number, so no other module needs to be handed either one
+  just to send this reply.
   """
 
   use Broadway
@@ -15,6 +21,7 @@ defmodule ZamHealthWatch.SmsReporting.Pipeline do
   require Logger
 
   alias Broadway.Message
+  alias ZamHealthWatch.SmsGateway
   alias ZamHealthWatch.SmsReporting
 
   def start_link(opts \\ []) do
@@ -61,7 +68,10 @@ defmodule ZamHealthWatch.SmsReporting.Pipeline do
 
   @impl true
   def handle_message(_processor, %Message{data: %{from: from, text: text}} = message, _context) do
-    case SmsReporting.report_from_sms(from, text) do
+    result = SmsReporting.report_from_sms(from, text)
+    SmsGateway.send_sms(from, SmsReporting.confirmation_message(result))
+
+    case result do
       {:ok, _case} ->
         message
 

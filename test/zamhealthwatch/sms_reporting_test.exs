@@ -1,6 +1,7 @@
 defmodule ZamHealthWatch.SmsReportingTest do
   use ZamHealthWatch.DataCase, async: false
 
+  import ExUnit.CaptureLog
   import ZamHealthWatch.GeographyFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
@@ -70,6 +71,38 @@ defmodule ZamHealthWatch.SmsReportingTest do
     end
   end
 
+  describe "confirmation_message/1" do
+    test "confirms success, naming the disease and facility" do
+      facility = facility_fixture(%{code: "UTH", name: "UTH"})
+      {:ok, case_record} = SmsReporting.report_from_sms("+260971234567", "REPORT CHOLERA UTH")
+
+      message = SmsReporting.confirmation_message({:ok, case_record})
+
+      assert message =~ "Cholera"
+      assert message =~ facility.name
+    end
+
+    test "explains an unrecognized format" do
+      message = SmsReporting.confirmation_message({:error, :unrecognized_format})
+      assert message =~ "REPORT"
+    end
+
+    test "names the unrecognized disease" do
+      message = SmsReporting.confirmation_message({:error, {:unknown_disease, "FLU"}})
+      assert message =~ "FLU"
+    end
+
+    test "names the unrecognized facility code" do
+      message = SmsReporting.confirmation_message({:error, {:unknown_facility, "NOPE"}})
+      assert message =~ "NOPE"
+    end
+
+    test "falls back to a generic message for any other error" do
+      message = SmsReporting.confirmation_message({:error, :something_unexpected})
+      assert message =~ "try again"
+    end
+  end
+
   # These tests exercise the real Broadway wiring (Producer's demand-driven
   # dispatch -> Pipeline.handle_message/3 -> report_from_sms/2 -> Repo),
   # not just report_from_sms/2 directly - that plumbing is the actual
@@ -91,40 +124,63 @@ defmodule ZamHealthWatch.SmsReportingTest do
       # module is what keeps it from colliding with itself.
       Sandbox.mode(Repo, {:shared, self()})
       on_exit(fn -> Sandbox.mode(Repo, :manual) end)
+
+      # Same Logger-level dance as PublicAlerts.AlertWorkerTest - needed
+      # here too now that handle_message/3 sends a reply through
+      # SmsGateway.Logger (the default in :test), which logs at :info,
+      # below this project's :warning test log level.
+      original_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: original_level) end)
     end
 
-    test "a pushed message flows through Producer -> Pipeline -> a real case" do
+    test "a pushed message flows through Producer -> Pipeline -> a real case, and replies" do
       facility = facility_fixture(%{code: "NTH"})
       name = :"sms_pipeline_test_#{System.unique_integer([:positive])}"
       start_supervised!({Pipeline, name: name})
 
-      Pipeline.push(name, %{from: "+260977000111", text: "REPORT TYPHOID NTH"})
+      log =
+        capture_log(fn ->
+          Pipeline.push(name, %{from: "+260977000111", text: "REPORT TYPHOID NTH"})
 
-      wait_until(fn ->
-        Enum.any?(CaseManagement.list_cases(), &(&1.facility_id == facility.id))
-      end)
+          wait_until(fn ->
+            Enum.any?(CaseManagement.list_cases(), &(&1.facility_id == facility.id))
+          end)
+        end)
 
       assert [case_record] = CaseManagement.list_cases()
       assert case_record.disease == :typhoid
       assert case_record.facility_id == facility.id
+
+      # The confirmation reply (sent via SmsGateway.Logger, the :test
+      # default) landed in the log too.
+      assert log =~ "+260977000111"
+      assert log =~ "Typhoid"
     end
 
-    test "a rejected message doesn't crash the pipeline or create a case" do
+    test "a rejected message doesn't crash the pipeline or create a case, and still replies" do
       name = :"sms_pipeline_test_#{System.unique_integer([:positive])}"
       start_supervised!({Pipeline, name: name})
 
-      Pipeline.push(name, %{from: "+260977000111", text: "not a report"})
+      log =
+        capture_log(fn ->
+          Pipeline.push(name, %{from: "+260977000111", text: "not a report"})
 
-      # Follow the bad message with a good one on the same pipeline - this
-      # only passes if the pipeline is still alive and taking demand right
-      # after rejecting a message, not just that a case never appears.
-      facility_fixture(%{code: "MMH"})
-      Pipeline.push(name, %{from: "+260977000111", text: "REPORT MEASLES MMH"})
+          # Follow the bad message with a good one on the same pipeline -
+          # this only passes if the pipeline is still alive and taking
+          # demand right after rejecting a message, not just that a case
+          # never appears.
+          facility_fixture(%{code: "MMH"})
+          Pipeline.push(name, %{from: "+260977000111", text: "REPORT MEASLES MMH"})
 
-      wait_until(fn -> CaseManagement.list_cases() != [] end)
+          wait_until(fn -> CaseManagement.list_cases() != [] end)
+        end)
 
       assert [case_record] = CaseManagement.list_cases()
       assert case_record.disease == :measles
+
+      # The rejected message's own reply (not the accepted one's).
+      assert log =~ "couldn't read that report"
     end
   end
 

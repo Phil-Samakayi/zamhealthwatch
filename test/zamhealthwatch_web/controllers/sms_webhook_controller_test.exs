@@ -5,6 +5,7 @@ defmodule ZamHealthWatchWeb.SmsWebhookControllerTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.PublicAlerts
   alias ZamHealthWatch.Repo
   alias ZamHealthWatch.SmsReporting
 
@@ -58,6 +59,29 @@ defmodule ZamHealthWatchWeb.SmsWebhookControllerTest do
         post(conn, ~p"/webhooks/sms", %{"from" => "+260971234567", "text" => "not a report"})
 
       assert conn.status == 200
+      assert CaseManagement.list_cases() == []
+    end
+
+    test "SUBSCRIBE is handled by PublicAlerts, not forwarded to the SMS reporting pipeline",
+         %{conn: conn} do
+      conn = post(conn, ~p"/webhooks/sms", %{"from" => "+260971234567", "text" => "SUBSCRIBE"})
+
+      assert conn.status == 200
+      assert PublicAlerts.list_subscriber_phones() == ["+260971234567"]
+      # Confirms this never reached SmsReporting.Pipeline - "SUBSCRIBE"
+      # doesn't match the REPORT grammar, so a case would only appear
+      # here if the keyword had wrongly fallen through.
+      assert CaseManagement.list_cases() == []
+    end
+
+    test "STOP is handled by PublicAlerts, not forwarded to the SMS reporting pipeline",
+         %{conn: conn} do
+      {:ok, _subscriber} = PublicAlerts.subscribe("+260971234567")
+
+      conn = post(conn, ~p"/webhooks/sms", %{"from" => "+260971234567", "text" => "STOP"})
+
+      assert conn.status == 200
+      assert PublicAlerts.list_subscriber_phones() == []
       assert CaseManagement.list_cases() == []
     end
   end
