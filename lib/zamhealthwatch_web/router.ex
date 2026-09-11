@@ -92,6 +92,13 @@ defmodule ZamHealthWatchWeb.Router do
       # this stays in the shared live_session rather than the
       # :require_moh_admin one below.
       live "/labs", LabLive.Index, :index
+
+      # Same reasoning as /labs above - recording a vaccination coverage
+      # figure is open to any authenticated user, no role gate. Unlike
+      # /labs there's no second, role-gated action on this screen at all
+      # (see VaccinationMonitoring's moduledoc - no lifecycle to guard),
+      # so this route needs nothing beyond what's already here.
+      live "/vaccinations", VaccinationLive.Index, :index
     end
 
     # A separate live_session, not folded into :require_authenticated_user
