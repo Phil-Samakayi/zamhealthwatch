@@ -38,16 +38,23 @@ for attrs <- districts do
   end
 end
 
+# Each facility now needs a `code` (Iteration 2: SmsReporting addresses
+# a facility by this short code from inside a plain-text SMS, not by
+# name or id). If you seeded facilities before this change, re-running
+# this script won't backfill their code - `Repo.get_by(Facility, name:
+# ...)` below will find the old row by name and skip it. Run
+# `mix ecto.reset` instead for a clean slate; there's no real data here
+# yet worth preserving over a backfill migration for four rows.
 facilities = [
-  "University Teaching Hospital",
-  "Kabwata Clinic",
-  "Ndola Teaching Hospital",
-  "Monze Mission Hospital"
+  {"University Teaching Hospital", "UTH"},
+  {"Kabwata Clinic", "KBW"},
+  {"Ndola Teaching Hospital", "NTH"},
+  {"Monze Mission Hospital", "MMH"}
 ]
 
-for name <- facilities do
+for {name, code} <- facilities do
   unless Repo.get_by(Facility, name: name) do
-    {:ok, _facility} = Geography.create_facility(%{name: name})
+    {:ok, _facility} = Geography.create_facility(%{name: name, code: code})
   end
 end
 

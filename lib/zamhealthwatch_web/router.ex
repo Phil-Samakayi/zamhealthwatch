@@ -17,6 +17,15 @@ defmodule ZamHealthWatchWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Inbound SMS/USSD webhooks - no browser session, no CSRF token to
+  # check (a webhook provider isn't a browser), so this deliberately
+  # doesn't go through the :browser pipeline.
+  scope "/webhooks", ZamHealthWatchWeb do
+    pipe_through :api
+
+    post "/sms", SmsWebhookController, :create
+  end
+
   scope "/", ZamHealthWatchWeb do
     pipe_through :browser
 

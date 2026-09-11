@@ -62,6 +62,11 @@ config :zamhealthwatch, Oban,
 # the app. On in dev/prod; off in test - see config/test.exs for why.
 config :zamhealthwatch, :start_public_alerts_subscriber, true
 
+# Whether ZamHealthWatch.SmsReporting.Pipeline (the Broadway pipeline
+# consuming inbound SMS reports) starts automatically with the app. On in
+# dev/prod; off in test - see config/test.exs for why.
+config :zamhealthwatch, :start_sms_reporting_pipeline, true
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

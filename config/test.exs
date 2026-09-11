@@ -41,6 +41,19 @@ config :zamhealthwatch, Oban, testing: :manual
 # explicitly Sandbox.allow/3 it into that one test's connection instead.
 config :zamhealthwatch, :start_public_alerts_subscriber, false
 
+# Same reasoning and same fix shape as :start_public_alerts_subscriber
+# above: ZamHealthWatch.SmsReporting.Pipeline is a permanent Broadway
+# pipeline that would otherwise try to write cases through Repo from
+# its own internal processor processes - processes no test ever
+# explicitly grants Sandbox access to. Off by default here; tests that
+# want to exercise the real pipeline start their own uniquely-named
+# instance with start_supervised!/1 and switch that test's Repo Sandbox
+# mode to {:shared, self()} (see sms_reporting_test.exs) rather than
+# Sandbox.allow/3 - Broadway's processor processes aren't a single
+# well-known pid the way PublicAlerts.Subscriber's GenServer is, so
+# there's no one pid to allow individually.
+config :zamhealthwatch, :start_sms_reporting_pipeline, false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

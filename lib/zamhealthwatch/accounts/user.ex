@@ -12,6 +12,7 @@ defmodule ZamHealthWatch.Accounts.User do
     field :authenticated_at, :utc_datetime, virtual: true
     field :role, Ecto.Enum, values: [:health_worker, :district_officer, :moh_admin]
     field :facility_id, :binary_id
+    field :phone, :string
 
     timestamps(type: :utc_datetime)
   end
@@ -134,6 +135,23 @@ defmodule ZamHealthWatch.Accounts.User do
     |> cast(attrs, [:role, :facility_id])
     |> validate_required([:role])
     |> foreign_key_constraint(:facility_id)
+  end
+
+  @doc """
+  A user changeset for an SMS-only reporter - a user identified by a
+  phone number instead of email/password, created the first time that
+  number reports a case over SMS (see
+  `Accounts.find_or_create_sms_reporter/1`). Deliberately separate from
+  `email_changeset/3`, same "one changeset per distinct operation"
+  discipline as `role_changeset/2` and `CaseManagement.Case`'s
+  `changeset/2` vs `status_changeset/2` - an SMS reporter never goes
+  through email registration, so there's no shared form here to reuse.
+  """
+  def sms_reporter_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:phone])
+    |> validate_required([:phone])
+    |> unique_constraint(:phone)
   end
 
   @doc """

@@ -60,6 +60,39 @@ defmodule ZamHealthWatch.Accounts do
   """
   def get_user!(id), do: Repo.get!(User, id)
 
+  @doc """
+  Finds the user with the given phone number, creating one if none
+  exists yet.
+
+  Used by `SmsReporting` to attribute a case reported over SMS to a
+  real user - there's no login/session for an inbound SMS the way there
+  is for `CaseLive.Index`'s web form, but `Case.reported_by_id` is a
+  required, `on_delete: :restrict` foreign key (Iteration 1's
+  audit-trail decision), so SMS reporting needs a real `User` row to
+  point at, not `nil`. A user created this way gets `role: nil` and no
+  `facility_id` - the same "role assigned later, by something else"
+  state any brand-new user starts in (Iteration 0's decision log
+  anticipated exactly this: assigning a role to an SMS reporter isn't a
+  use case yet).
+
+  ## Examples
+
+      iex> find_or_create_sms_reporter("+260971234567")
+      {:ok, %User{}}
+
+  """
+  def find_or_create_sms_reporter(phone) when is_binary(phone) do
+    case Repo.get_by(User, phone: phone) do
+      nil ->
+        %User{}
+        |> User.sms_reporter_changeset(%{phone: phone})
+        |> Repo.insert()
+
+      user ->
+        {:ok, user}
+    end
+  end
+
   ## User registration
 
   @doc """

@@ -17,6 +17,21 @@ defmodule ZamHealthWatch.AccountsTest do
     end
   end
 
+  describe "find_or_create_sms_reporter/1" do
+    test "creates a new user with the given phone, role: nil" do
+      assert {:ok, user} = Accounts.find_or_create_sms_reporter("+260971234567")
+      assert user.phone == "+260971234567"
+      assert user.role == nil
+      assert user.email == nil
+    end
+
+    test "returns the existing user for a phone already on file" do
+      assert {:ok, first} = Accounts.find_or_create_sms_reporter("+260971234567")
+      assert {:ok, second} = Accounts.find_or_create_sms_reporter("+260971234567")
+      assert first.id == second.id
+    end
+  end
+
   describe "get_user_by_email_and_password/2" do
     test "does not return the user if the email does not exist" do
       refute Accounts.get_user_by_email_and_password("unknown@example.com", "hello world!")

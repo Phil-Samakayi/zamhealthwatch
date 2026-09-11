@@ -77,10 +77,30 @@ defmodule ZamHealthWatch.GeographyTest do
     end
 
     test "create_facility/1 with valid data creates a facility" do
-      valid_attrs = %{name: "some name"}
+      valid_attrs = %{name: "some name", code: "SOME1"}
 
       assert {:ok, %Facility{} = facility} = Geography.create_facility(valid_attrs)
       assert facility.name == "some name"
+      assert facility.code == "SOME1"
+    end
+
+    test "create_facility/1 requires a code" do
+      assert {:error, changeset} = Geography.create_facility(%{name: "some name"})
+      assert %{code: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "create_facility/1 rejects a lowercase or non-alphanumeric code" do
+      assert {:error, changeset} = Geography.create_facility(%{name: "some name", code: "abc"})
+      assert %{code: ["must be uppercase letters/numbers only"]} = errors_on(changeset)
+    end
+
+    test "get_facility_by_code/1 finds a facility by its code" do
+      facility = facility_fixture(%{code: "UTH"})
+      assert Geography.get_facility_by_code("UTH") == facility
+    end
+
+    test "get_facility_by_code/1 returns nil for an unknown code" do
+      assert Geography.get_facility_by_code("NOPE") == nil
     end
 
     test "create_facility/1 with invalid data returns error changeset" do

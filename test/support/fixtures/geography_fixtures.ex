@@ -24,7 +24,8 @@ defmodule ZamHealthWatch.GeographyFixtures do
   def facility_fixture(attrs \\ %{}) do
     attrs =
       Enum.into(attrs, %{
-        name: "some name"
+        name: "some name",
+        code: "F#{System.unique_integer([:positive])}"
       })
 
     {:ok, facility} = ZamHealthWatch.Geography.create_facility(attrs)

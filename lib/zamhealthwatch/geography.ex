@@ -188,6 +188,26 @@ defmodule ZamHealthWatch.Geography do
   def get_facility!(id), do: Repo.get!(Facility, id)
 
   @doc """
+  Gets a facility by its short `code` (e.g. "UTH"), or `nil` if none matches.
+
+  Used by `SmsReporting` to resolve the facility named in an inbound SMS
+  report. Returns `nil` rather than raising - an SMS with a typo'd or
+  unknown code is bad input to reject gracefully, not a bug to crash on.
+
+  ## Examples
+
+      iex> get_facility_by_code("UTH")
+      %Facility{}
+
+      iex> get_facility_by_code("NOPE")
+      nil
+
+  """
+  def get_facility_by_code(code) when is_binary(code) do
+    Repo.get_by(Facility, code: code)
+  end
+
+  @doc """
   Creates a facility.
 
   ## Examples
