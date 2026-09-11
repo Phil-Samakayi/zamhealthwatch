@@ -70,6 +70,7 @@ defmodule ZamHealthWatch.MixProject do
       {:req, "~> 0.5"},
       {:oban, "~> 2.18"},
       {:broadway, "~> 1.0"},
+      {:nx, "~> 0.9"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},

@@ -141,5 +141,36 @@ defmodule ZamHealthWatch.CaseManagementTest do
                facility_b.id => 1
              }
     end
+
+    test "count_cases_by_facility_between/2 only counts cases reported inside the window" do
+      facility = facility_fixture()
+
+      _before_window = report_case_at(facility, ~U[2026-08-20 00:00:00Z])
+      _inside_window_1 = report_case_at(facility, ~U[2026-09-02 00:00:00Z])
+      _inside_window_2 = report_case_at(facility, ~U[2026-09-07 23:59:59Z])
+      _at_the_boundary_after_window = report_case_at(facility, ~U[2026-09-08 00:00:00Z])
+
+      assert CaseManagement.count_cases_by_facility_between(
+               ~U[2026-09-01 00:00:00Z],
+               ~U[2026-09-08 00:00:00Z]
+             ) == %{facility.id => 2}
+    end
+
+    test "count_cases_by_facility_between/2 returns an empty map when nothing falls in the window" do
+      facility_fixture()
+
+      assert CaseManagement.count_cases_by_facility_between(
+               ~U[2026-01-01 00:00:00Z],
+               ~U[2026-01-08 00:00:00Z]
+             ) == %{}
+    end
+
+    defp report_case_at(facility, inserted_at) do
+      case = case_fixture(%{facility_id: facility.id})
+
+      case
+      |> Ecto.Changeset.change(inserted_at: inserted_at)
+      |> ZamHealthWatch.Repo.update!()
+    end
   end
 end

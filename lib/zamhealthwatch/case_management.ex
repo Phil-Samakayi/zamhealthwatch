@@ -226,4 +226,35 @@ defmodule ZamHealthWatch.CaseManagement do
     Repo.all(from c in Case, group_by: c.facility_id, select: {c.facility_id, count(c.id)})
     |> Map.new()
   end
+
+  @doc """
+  Returns case counts grouped by facility for cases reported in
+  `[start_dt, end_dt)`, as `%{facility_id => count}`.
+
+  Built for `PredictiveAnalytics`'s weekly trend buckets, but a general
+  enough primitive (an arbitrary time window, not "the last N days") to
+  reuse anywhere else a windowed count is needed later. Uses `inserted_at`
+  as "when the case was reported" - there's no separate
+  "when symptoms/the outbreak actually started" field on `Case`, so
+  report time is the closest proxy this system has.
+
+  Same zero-omission and name-decoupling notes as `count_cases_by_facility/0`
+  apply: a facility with no cases in the window is simply absent, and
+  facility names aren't joined in here.
+
+  ## Examples
+
+      iex> count_cases_by_facility_between(~U[2026-09-01 00:00:00Z], ~U[2026-09-08 00:00:00Z])
+      %{"facility-uuid" => 2}
+
+  """
+  def count_cases_by_facility_between(start_dt, end_dt) do
+    Repo.all(
+      from c in Case,
+        where: c.inserted_at >= ^start_dt and c.inserted_at < ^end_dt,
+        group_by: c.facility_id,
+        select: {c.facility_id, count(c.id)}
+    )
+    |> Map.new()
+  end
 end

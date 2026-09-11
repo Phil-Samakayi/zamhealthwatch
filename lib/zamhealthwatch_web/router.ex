@@ -80,6 +80,10 @@ defmodule ZamHealthWatchWeb.Router do
       # Same reasoning as /epidemiology above - an internal view over
       # the same case data, no separate public route/auth model yet.
       live "/map", MapLive.Index, :index
+
+      # Same reasoning again - an internal analytical view over the
+      # same case data, no separate public route/auth model yet.
+      live "/risk", RiskLive.Index, :index
     end
 
     post "/users/update-password", UserSessionController, :update_password
