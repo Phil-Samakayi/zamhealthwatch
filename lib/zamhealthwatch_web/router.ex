@@ -86,6 +86,18 @@ defmodule ZamHealthWatchWeb.Router do
       live "/risk", RiskLive.Index, :index
     end
 
+    # A separate live_session, not folded into :require_authenticated_user
+    # above (AGENTS.md: never duplicate a live_session name) - its
+    # on_mount chain (:require_moh_admin) is strictly more restrictive,
+    # composing on top of :require_authenticated rather than replacing
+    # it. Role assignment is the first genuinely admin-gated screen in
+    # this project; everything else behind :require_authenticated_user
+    # is usable by any logged-in user regardless of role.
+    live_session :require_moh_admin,
+      on_mount: [{ZamHealthWatchWeb.UserAuth, :require_moh_admin}] do
+      live "/admin/users", AdminLive.Index, :index
+    end
+
     post "/users/update-password", UserSessionController, :update_password
   end
 

@@ -293,6 +293,81 @@ defmodule ZamHealthWatchWeb.UserAuthTest do
     end
   end
 
+  describe "on_mount :require_moh_admin" do
+    test "allows a user with the moh_admin role", %{conn: conn, user: user} do
+      user = set_role(user, :moh_admin)
+      user_token = Accounts.generate_user_session_token(user)
+      session = conn |> put_session(:user_token, user_token) |> get_session()
+
+      socket = %LiveView.Socket{
+        endpoint: ZamHealthWatchWeb.Endpoint,
+        assigns: %{__changed__: %{}, flash: %{}}
+      }
+
+      assert {:cont, updated_socket} =
+               UserAuth.on_mount(:require_moh_admin, %{}, session, socket)
+
+      assert updated_socket.assigns.current_scope.user.id == user.id
+    end
+
+    test "halts with a permission error for a logged-in user with a different role", %{
+      conn: conn,
+      user: user
+    } do
+      user = set_role(user, :health_worker)
+      user_token = Accounts.generate_user_session_token(user)
+      session = conn |> put_session(:user_token, user_token) |> get_session()
+
+      socket = %LiveView.Socket{
+        endpoint: ZamHealthWatchWeb.Endpoint,
+        assigns: %{__changed__: %{}, flash: %{}}
+      }
+
+      assert {:halt, updated_socket} =
+               UserAuth.on_mount(:require_moh_admin, %{}, session, socket)
+
+      assert Phoenix.Flash.get(updated_socket.assigns.flash, :error) ==
+               "You don't have permission to access this page."
+    end
+
+    test "halts with a permission error for a logged-in user with no role", %{
+      conn: conn,
+      user: user
+    } do
+      user_token = Accounts.generate_user_session_token(user)
+      session = conn |> put_session(:user_token, user_token) |> get_session()
+
+      socket = %LiveView.Socket{
+        endpoint: ZamHealthWatchWeb.Endpoint,
+        assigns: %{__changed__: %{}, flash: %{}}
+      }
+
+      assert {:halt, updated_socket} =
+               UserAuth.on_mount(:require_moh_admin, %{}, session, socket)
+
+      assert Phoenix.Flash.get(updated_socket.assigns.flash, :error) ==
+               "You don't have permission to access this page."
+    end
+
+    test "halts and redirects to login (not the permission error) if there's no valid user_token",
+         %{conn: conn} do
+      session = conn |> put_session(:user_token, "invalid_token") |> get_session()
+
+      socket = %LiveView.Socket{
+        endpoint: ZamHealthWatchWeb.Endpoint,
+        assigns: %{__changed__: %{}, flash: %{}}
+      }
+
+      assert {:halt, updated_socket} =
+               UserAuth.on_mount(:require_moh_admin, %{}, session, socket)
+
+      assert updated_socket.assigns.current_scope == nil
+
+      assert Phoenix.Flash.get(updated_socket.assigns.flash, :error) ==
+               "You must log in to access this page."
+    end
+  end
+
   describe "on_mount :require_sudo_mode" do
     test "allows users that have authenticated in the last 10 minutes", %{conn: conn, user: user} do
       user_token = Accounts.generate_user_session_token(user)

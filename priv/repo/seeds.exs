@@ -10,6 +10,7 @@
 # We recommend using the bang functions (`insert!`, `update!`
 # and so on) as they will fail if something goes wrong.
 
+alias ZamHealthWatch.Accounts
 alias ZamHealthWatch.Geography
 alias ZamHealthWatch.Geography.{District, Facility}
 alias ZamHealthWatch.Repo
@@ -82,3 +83,34 @@ for {name, code, lat, lng, district_name} <- facilities do
 end
 
 IO.puts("Seeded #{length(districts)} districts and #{length(facilities)} facilities.")
+
+# Bootstraps the developer's own account as `:moh_admin` if it exists and
+# has no role yet - the one chicken-and-egg problem `/admin/users`
+# (Iteration 4's role assignment UI) can't solve by itself: every action
+# on that page is gated behind an existing `:moh_admin`, so the very
+# first admin has to come from somewhere else. This replaces the manual
+# `iex -S mix` snippet logged in docs/ITERATIONS.md's Iteration 3
+# gotchas - `/admin/users` is how roles get managed from here on, but
+# minting the first admin still needs one out-of-band step, and seeding
+# is the same idempotent, safe-to-re-run mechanism already used for
+# districts/facilities rather than a new, one-off mix task.
+#
+# Guarded on `role: nil`, not "always overwrite" - re-running this
+# script (e.g. after adding a seed facility) should never clobber a role
+# someone has since changed through the real UI. No-ops entirely if the
+# account hasn't registered yet; there's nothing to bootstrap before a
+# matching `users` row exists.
+case Repo.get_by(Accounts.User, email: "philsamakayi@gmail.com") do
+  %{role: nil} = admin ->
+    {:ok, _admin} = Accounts.assign_user_role(admin, %{role: :moh_admin})
+    IO.puts("Bootstrapped philsamakayi@gmail.com as moh_admin.")
+
+  %Accounts.User{} ->
+    :ok
+
+  nil ->
+    IO.puts(
+      "No account for philsamakayi@gmail.com yet - register one, then re-run " <>
+        "priv/repo/seeds.exs to bootstrap it as moh_admin."
+    )
+end

@@ -194,6 +194,12 @@ defmodule ZamHealthWatchWeb.UserAuth do
       on user_token.
       Redirects to login page if there's no logged user.
 
+    * `:require_moh_admin` - Same as `:require_authenticated`, plus
+      requires `current_scope.user.role == :moh_admin`. Redirects to
+      the login page if there's no logged-in user (same message as
+      `:require_authenticated`), or to `/` with a permission error if
+      the logged-in user isn't a `:moh_admin`.
+
   ## Examples
 
   Use the `on_mount` lifecycle macro in LiveViews to mount or authenticate
@@ -228,6 +234,32 @@ defmodule ZamHealthWatchWeb.UserAuth do
         |> Phoenix.LiveView.redirect(to: ~p"/users/log-in")
 
       {:halt, socket}
+    end
+  end
+
+  # Role assignment (`AdminLive.Index`, Iteration 4) is the first place
+  # in this project with a real, specific-role authorization need - every
+  # earlier "no role check yet" decision (Geography's writes, case
+  # reporting, the case list itself) stayed permissive precisely because
+  # nothing needed otherwise. Composed on top of `:require_authenticated`
+  # rather than duplicating its session/redirect logic - the only new
+  # behavior here is the role check once a user is confirmed logged in.
+  def on_mount(:require_moh_admin, params, session, socket) do
+    case on_mount(:require_authenticated, params, session, socket) do
+      {:cont, socket} ->
+        if socket.assigns.current_scope.user.role == :moh_admin do
+          {:cont, socket}
+        else
+          socket =
+            socket
+            |> Phoenix.LiveView.put_flash(:error, "You don't have permission to access this page.")
+            |> Phoenix.LiveView.redirect(to: ~p"/")
+
+          {:halt, socket}
+        end
+
+      {:halt, socket} ->
+        {:halt, socket}
     end
   end
 
