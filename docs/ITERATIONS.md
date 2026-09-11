@@ -363,3 +363,31 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 **Status:** `mix test`-verified (299 tests, 0 failures) - clean first run, no fixes needed. Iteration 6 is closed. Next: pick the next Construction module (Drug Availability or Hospital Capacity), or revisit `PredictiveAnalytics` to move it to district-level scoring so Vaccination Monitoring can actually feed risk scoring per the brief.
 
 ---
+
+## Iteration 7 — Construction: Drug Availability
+
+**Goal:** the brief's "stock levels of essential medicines by facility; flags shortages that compound an active outbreak" module. Smallest useful cut: record a stock submission (quantity on hand against a reorder level, for a facility/medicine combination) and flag it as a shortage when quantity falls below the reorder level - the "compound an active outbreak" correlation with live case data is deliberately left for later (see below).
+
+**Decisions:**
+
+- Reported at *facility* level (`facility_id`, not `district_id`) - the brief's own phrasing is "by facility", matching `Case`/`LabTest`'s existing grain rather than `VaccinationMonitoring`'s district-level one from Iteration 6. Different modules, different natural grain by the brief's own wording - no attempt made to force them to match each other.
+- `DrugAvailability` is its own context, decoupled from `Geography` and `Accounts` the same way every prior context in this project is - `foreign_key_constraint/2` on the schema (`facility_id`, `reported_by_id`), no cross-context associations.
+- Same "reported once, no lifecycle, no editing yet" shape `VaccinationMonitoring` already settled on in Iteration 6, for the same reason: a stock count either gets corrected by a new submission or it doesn't, there's no second phase to advance it through. Consequently, recording is open to any authenticated user, no role gate - there's no second, role-gated action on this screen the way `LabLive.Index`'s result-recording buttons need one.
+- `reorder_level` is entered per submission, not looked up from a fixed per-medicine table of "safe stock levels" - real consumption varies enough by facility that a single global threshold per medicine would be a guessed-at rule with no real data behind it. Whoever submits a count is trusted to know what "low" means at their own facility.
+- `medicine` is a fixed `Ecto.Enum` scoped to essential medicines that map to this project's five tracked diseases (ORS and IV fluids for cholera, Artemether-Lumefantrine for malaria, Ciprofloxacin and Ceftriaxone for typhoid) rather than a general pharmacy formulary - same "only what a real use case needs" reasoning `Case.disease_options/0` already applies to disease tracking. `DrugStock.medicine_options/0`/`medicine_label/1` on the schema from the start, same pattern `VaccinationRecord.antigen_options/0`/`antigen_label/1` used.
+- `DrugStock.shortage?/1` is a computed boolean (Information Expert - the schema holding both numbers answers "is this a shortage"), not a persisted column that could drift out of sync with the two numbers it's derived from. Two states only (Adequate/Shortage), not a graded tier system the way `VaccinationRecord`'s coverage badge has three - "flags shortages" in the brief reads as a binary signal, and a graded early-warning tier would be a rule with no real use case behind it yet.
+- The brief's "flags shortages that compound an active outbreak" half is only half built this slice, and that's worth being direct about: nothing here cross-references an active case's disease against the medicine that treats it (e.g. a cholera case at a facility with an ORS shortage). That correlation is real, separate analysis work - deliberately not guessed at here, same call `VaccinationMonitoring` made about its own risk-scoring integration in Iteration 6 rather than bolting on something half-considered.
+- Own `"drug_stocks"` PubSub topic, not reused from any other context's - same per-context topic precedent every module in this project has set.
+- `time_ago/1` extracted out of `LabLive.Index` and `VaccinationLive.Index` (each carrying an identical private copy) into a new shared `ZamHealthWatchWeb.TimeHelpers` module, now that `DrugLive.Index` is a third consumer of the exact same function - exactly the threshold `Case.disease_options/0`'s own decision log named as the trigger in Iteration 5 ("two isn't a pattern yet"). Imported (`import ZamHealthWatchWeb.TimeHelpers, only: [time_ago: 1]`) rather than aliased, so call sites in all three LiveViews stay unchanged. Given its own direct unit tests (`TimeHelpersTest`) for the first time, since it's no longer a private, only-indirectly-exercised implementation detail of one LiveView.
+
+**Built:**
+
+- [x] Migration: `drug_stocks` table (`medicine`, `quantity_on_hand`, `reorder_level`, `facility_id`, `reported_by_id`, indexed on `facility_id`/`reported_by_id`/`medicine`).
+- [x] `DrugAvailability` context + `DrugStock` schema - `list_drug_stocks/0`, `get_drug_stock!/1`, `record_stock/1`, `change_drug_stock/2`, `medicine_options/0`, `medicine_label/1`, `shortage?/1`, PubSub broadcast (`"drug_stocks"` topic) on create.
+- [x] `DrugLive.Index` at `/drugs` - a stock-submission form (facility/medicine/quantity/reorder level) above a live-updating table with a computed Adequate/Shortage badge per row.
+- [x] `ZamHealthWatchWeb.TimeHelpers.time_ago/1`, extracted from `LabLive.Index`/`VaccinationLive.Index`, now shared by all three LiveViews; `TimeHelpersTest` covering "just now", minutes, hours, and days.
+- [x] Tests: context tests (list, get, record with valid/invalid data - required fields, negative quantity, negative reorder level, bad `facility_id`/`reported_by_id` FKs, broadcast; `shortage?/1` both directions; `medicine_options/0`/`medicine_label/1`); LiveView tests (auth redirect, empty state, listing, recording with valid data, validation error, the server overriding a tampered `reported_by_id`, live broadcast to a second viewer, and both badge states).
+
+**Status:** `mix test`-verified (329 tests, 0 failures) - clean first run, no fixes needed. Iteration 7 is closed. Next: Hospital Capacity (the last of the brief's four Construction modules), or revisit `PredictiveAnalytics` to move it to district-level scoring, or build the shortage/active-outbreak correlation this iteration deliberately deferred.
+
+---

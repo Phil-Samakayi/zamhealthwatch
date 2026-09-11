@@ -1,6 +1,8 @@
 defmodule ZamHealthWatchWeb.VaccinationLive.Index do
   use ZamHealthWatchWeb, :live_view
 
+  import ZamHealthWatchWeb.TimeHelpers, only: [time_ago: 1]
+
   alias ZamHealthWatch.Geography
   alias ZamHealthWatch.VaccinationMonitoring
   alias ZamHealthWatch.VaccinationMonitoring.VaccinationRecord
@@ -140,16 +142,5 @@ defmodule ZamHealthWatchWeb.VaccinationLive.Index do
 
   defp coverage_percent(entry) do
     entry |> VaccinationRecord.coverage_rate() |> Kernel.*(100) |> Float.round(1)
-  end
-
-  defp time_ago(datetime) do
-    seconds = DateTime.diff(DateTime.utc_now(), datetime, :second)
-
-    cond do
-      seconds < 60 -> "just now"
-      seconds < 3600 -> "#{div(seconds, 60)}m ago"
-      seconds < 86_400 -> "#{div(seconds, 3600)}h ago"
-      true -> "#{div(seconds, 86_400)}d ago"
-    end
   end
 end

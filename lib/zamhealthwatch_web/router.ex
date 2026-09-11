@@ -99,6 +99,12 @@ defmodule ZamHealthWatchWeb.Router do
       # (see VaccinationMonitoring's moduledoc - no lifecycle to guard),
       # so this route needs nothing beyond what's already here.
       live "/vaccinations", VaccinationLive.Index, :index
+
+      # Same reasoning as /labs and /vaccinations above - recording a
+      # drug stock figure is open to any authenticated user, no role
+      # gate, and there's no second, role-gated action on this screen
+      # either (see DrugAvailability's moduledoc).
+      live "/drugs", DrugLive.Index, :index
     end
 
     # A separate live_session, not folded into :require_authenticated_user

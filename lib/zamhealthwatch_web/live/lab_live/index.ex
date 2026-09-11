@@ -1,6 +1,8 @@
 defmodule ZamHealthWatchWeb.LabLive.Index do
   use ZamHealthWatchWeb, :live_view
 
+  import ZamHealthWatchWeb.TimeHelpers, only: [time_ago: 1]
+
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
@@ -225,15 +227,4 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
   end
 
   defp can_record_result?(_current_scope, _lab_test), do: false
-
-  defp time_ago(datetime) do
-    seconds = DateTime.diff(DateTime.utc_now(), datetime, :second)
-
-    cond do
-      seconds < 60 -> "just now"
-      seconds < 3600 -> "#{div(seconds, 60)}m ago"
-      seconds < 86_400 -> "#{div(seconds, 3600)}h ago"
-      true -> "#{div(seconds, 86_400)}d ago"
-    end
-  end
 end
