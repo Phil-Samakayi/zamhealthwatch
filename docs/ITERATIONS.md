@@ -391,3 +391,29 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 **Status:** `mix test`-verified (329 tests, 0 failures) - clean first run, no fixes needed. Iteration 7 is closed. Next: Hospital Capacity (the last of the brief's four Construction modules), or revisit `PredictiveAnalytics` to move it to district-level scoring, or build the shortage/active-outbreak correlation this iteration deliberately deferred.
 
 ---
+
+## Iteration 8 — Construction: Hospital Capacity
+
+**Goal:** the brief's "bed occupancy, ICU availability, admission rates by facility - the 'can the system absorb this' view" module - the last of the brief's four Construction modules (Laboratory Reporting, Vaccination Monitoring, Drug Availability, Hospital Capacity all now built). Smallest useful cut: record a capacity snapshot (total/occupied beds, ICU beds total/occupied, today's admissions) for a facility and flag it Adequate/Near capacity/Over capacity by bed occupancy.
+
+**Decisions:**
+
+- Reported at *facility* level (`facility_id`), same grain as `Case`/`LabTest`/`DrugStock` - the brief's own phrasing is "by facility". Unlike `VaccinationMonitoring`'s genuine district/facility mismatch with `PredictiveAnalytics.list_risk_scores/1` (which scores per facility today), this module's grain already matches - a real, comparatively easy future integration, still deliberately not built this slice (see below).
+- `HospitalCapacity` is its own context, decoupled from `Geography` and `Accounts` the same way every prior context in this project is.
+- Same "reported once, no lifecycle, no editing yet, open to any authenticated user, no role gate" shape `VaccinationMonitoring` and `DrugAvailability` already settled on - a capacity snapshot either gets corrected by a new submission or it doesn't, and there's no second, role-gated action on this screen.
+- `occupied_beds`/`icu_beds_occupied` are **not** validated against `total_beds`/`icu_beds_total` - a facility genuinely running over its nominal capacity (overflow beds, hallway admissions) during a real outbreak is exactly the "can the system absorb this" signal this module exists to surface, not invalid data to reject. Same "don't clamp away a meaningful over-target signal" reasoning `VaccinationRecord.coverage_rate/1` already applied.
+- `icu_occupancy_rate/1` returns `nil` when a facility has zero ICU beds, rather than a misleading `0.0` or a crash - a facility legitimately having no ICU capacity at all is a real state, not an edge case to paper over. The LiveView renders this as "No ICU beds" rather than a percentage.
+- `capacity_status/1` (`:adequate`/`:near_capacity`/`:over_capacity` at 80%/100% bed occupancy) is driven by general bed occupancy only, not blended with ICU occupancy - stacking two independent tier systems into one first slice would be guessing at a combined-severity rule with no real use case behind it yet. Same honestly-flagged-arbitrary threshold spirit as `PredictiveAnalytics.RiskScore`'s tiers and `VaccinationRecord`'s coverage badge, not calibrated against a real target yet.
+- Not wired into `PredictiveAnalytics.list_risk_scores/1` this slice, despite the facility-level grain making it a comparatively quick addition unlike Vaccination Monitoring's - still real, separate work (deciding how bed strain should combine with the existing case-trend tier isn't something to guess at without a real use case), and out of scope for this slice specifically. Logged here as the easier of the two still-open `PredictiveAnalytics` integrations.
+- `time_ago/1` reused from the shared `ZamHealthWatchWeb.TimeHelpers` extracted in Iteration 7 - now a fourth consumer, no further duplication introduced.
+
+**Built:**
+
+- [x] Migration: `capacity_reports` table (`total_beds`, `occupied_beds`, `icu_beds_total`, `icu_beds_occupied`, `admissions_today`, `facility_id`, `reported_by_id`, indexed on `facility_id`/`reported_by_id`).
+- [x] `HospitalCapacity` context + `CapacityReport` schema - `list_capacity_reports/0`, `get_capacity_report!/1`, `record_capacity/1`, `change_capacity_report/2`, `bed_occupancy_rate/1`, `icu_occupancy_rate/1`, `icu_beds_available/1`, `capacity_status/1`, PubSub broadcast (`"capacity_reports"` topic) on create.
+- [x] `HospitalLive.Index` at `/hospitals` - a capacity-submission form above a live-updating table with a computed Adequate/Near capacity/Over capacity badge and an ICU free/total column (or "No ICU beds").
+- [x] Tests: context tests (list, get, record with valid/invalid data - required fields, non-positive `total_beds`, negative counts, the deliberate over-capacity-not-rejected case, bad `facility_id`/`reported_by_id` FKs, broadcast; `bed_occupancy_rate/1` including not-capped-above-100%; `icu_occupancy_rate/1` including the zero-ICU-beds `nil` case; `icu_beds_available/1` including going negative; all three `capacity_status/1` tiers); LiveView tests (auth redirect, empty state, listing, recording with valid data, validation error, the server overriding a tampered `reported_by_id`, live broadcast to a second viewer, all three badge tiers, and the "No ICU beds" render).
+
+**Status:** `mix test`-verified (362 tests, 0 failures) - clean first run, no fixes needed. Iteration 8 is closed, and with it all four of the brief's Construction modules (Laboratory Reporting, Vaccination Monitoring, Drug Availability, Hospital Capacity). Next: pick one of the deferred integration threads - `PredictiveAnalytics` district-level scoring (unblocks Vaccination Monitoring feeding risk scores), `PredictiveAnalytics` + Hospital Capacity (the easier of the two, same facility grain), or the Drug Availability shortage/active-outbreak correlation - or move toward Transition-phase polish (Public Alerts, Health Worker Portal, National Reporting, or deployment).
+
+---

@@ -105,6 +105,12 @@ defmodule ZamHealthWatchWeb.Router do
       # gate, and there's no second, role-gated action on this screen
       # either (see DrugAvailability's moduledoc).
       live "/drugs", DrugLive.Index, :index
+
+      # Same reasoning as /labs, /vaccinations, and /drugs above -
+      # recording a capacity report is open to any authenticated user,
+      # no role gate, and there's no second, role-gated action on this
+      # screen either (see HospitalCapacity's moduledoc).
+      live "/hospitals", HospitalLive.Index, :index
     end
 
     # A separate live_session, not folded into :require_authenticated_user
