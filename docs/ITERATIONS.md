@@ -214,3 +214,44 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 - None new - this slice touched schema/changeset/seed/LiveView code already well-trodden by prior slices, no new library or infrastructure risk introduced.
 
 **Status:** `mix test`-verified (208 tests, 0 failures). By-district aggregation is closed. Remaining Iteration 1 gaps: role-gated case status transitions, reporter identity in the case list.
+
+---
+
+## Iteration 3 — Closing logged gaps: role-gated case status transitions
+
+**Goal:** the second of the three gaps carried forward from Iteration 1. `update_case_status/2` has existed and been tested since Iteration 1, but `CaseLive.Index` deliberately shipped with no confirm/resolve controls at all, because there was no role-based workflow yet to decide who's allowed to move a case through its lifecycle. This slice adds exactly that control, at the smallest useful grain: any user with *an* assigned role can advance a case one step; which of the three roles may do what is explicitly not decided here (see below).
+
+**Decisions:**
+
+- `CaseManagement.next_status/1` encodes the one-directional lifecycle (`:suspected -> :confirmed -> :resolved -> nil`) as a lookup, layered on top of `update_case_status/2` rather than tightening `Case.status_changeset/2` itself. Iteration 1 deliberately left the changeset permissive (any valid status from any other) because there was no screen yet to make a stricter rule meaningful; now that `CaseLive.Index` has one, the stricter rule lives in the one place that needs it, so a future consumer that legitimately needs to set an arbitrary status (a correction, a data-migration script) still can.
+- `CaseManagement.advance_case_status/2` takes a plain `role` atom (or `nil`), not an `%Accounts.User{}` struct - `CaseManagement` stays decoupled from `Accounts`'s schema the same way it already is from `Geography.Facility`'s (no cross-context struct aliasing anywhere in this project so far). `CaseLive.Index` is what bridges the two contexts, reading `current_scope.user.role` and passing the bare atom through.
+- Authorization is binary at this slice: `role` must be assigned (not `nil`) - any of the three roles qualifies, no distinction between `:health_worker`, `:district_officer`, and `:moh_admin` for who may confirm vs. resolve a case. No real use case has decided that distinction yet (e.g. "only `:moh_admin` may resolve"), and guessing at one would be exactly the kind of speculative rule this project has consistently avoided (role-on-`User` itself in Iteration 0, write-authorization on `Geography` in Iteration 0, disease/status enums needing no metadata in Iteration 1). This is a logged, deliberate gap, not an oversight - revisit once a real workflow need shows up.
+- Both checks - role present, case has a next status - are enforced in `CaseManagement.advance_case_status/2` itself, not only in `CaseLive.Index`'s decision to render a button. A forged `"advance_status"` event (bypassing the UI entirely) hits the same two checks a real click does - the same server-side-re-validation precedent `with_reporter/2` already set for `reported_by_id` tampering in Iteration 1.
+- `CaseLive.Index`'s `can_advance_status?/2` mirrors the same two checks purely to decide whether to render the button at all - a UI nicety (don't show a dead-end "Confirm" on a resolved case, don't show any button to a roleless user), not a second authorization boundary. `advance_case_status/2` re-checks both regardless of what the UI shows or hides.
+- The button relies on the existing PubSub round-trip rather than a manual `stream_insert` in the event handler's success branch: `advance_case_status/2` broadcasts `{:updated, case}` through the same `"cases"` topic every other mutation in this project already uses, which lands right back on this LiveView's own `handle_info({:updated, _}, _)`. Same "don't special-case the mutating client" pattern `handle_event("save", ...)` already uses for newly-created cases.
+- There's still no self-service or admin UI to assign a role to a user - `Accounts.assign_user_role/2` has existed since Iteration 0 but nothing calls it outside `iex`. That's a real, separately-logged gap (role assignment itself), not something this slice's job to close; it's the reason this slice's buttons won't appear for anyone until a role is assigned by hand. Revisit once there's a real use case for self-service role requests or admin approval - not guessed at here, same as every other not-yet-needed piece in this log.
+
+**Built:**
+
+- [x] `CaseManagement.next_status/1` - `:suspected -> :confirmed -> :resolved -> nil`.
+- [x] `CaseManagement.advance_case_status/2` - `{:ok, case}` / `{:error, :unauthorized}` / `{:error, :no_next_status}`.
+- [x] `CaseLive.Index` - an "Actions" column with a Confirm/Resolve button (rendered only when the current user has a role and the case has a next status), a `handle_event("advance_status", ...)` that calls `advance_case_status/2` and flashes success or the specific rejection reason, and `can_advance_status?/2`/`advance_label/1` helpers.
+- [x] Tests: `CaseManagement.next_status/1` and `advance_case_status/2` (success, `:unauthorized`, `:no_next_status`) in `case_management_test.exs`; button visibility across roleless/role-assigned/resolved cases, the success path, and two forged-event cases (no role, already-resolved) in `case_live/index_test.exs`.
+
+**Gotchas:**
+
+- `<.button type="button" ...>` triggered a compile warning (`undefined attribute "type"`) - `CoreComponents.button/1`'s `:rest` global attr has an explicit `include:` allowlist (`href navigate patch method download name value disabled`) that `type` isn't part of, so it's rejected rather than passed through. Not actually needed here anyway (the button isn't inside the report `<.form>`, so there's no accidental-submit risk `type="button"` would guard against) - dropped it rather than widening the shared component's allowlist for one caller.
+- First real `mix test` run (222 tests, 3 failures) found real test bugs, not production bugs - worth logging since two of the three are the same category of mistake and easy to repeat:
+  - Two button-visibility tests asserted `refute html =~ "Confirm"` / `refute html =~ "Resolve"` against the *whole page's* HTML - but the status badge right next to the button renders "Confirmed"/"Resolved", and `"Confirmed"` contains `"Confirm"` as a substring (same for `"Resolved"`/`"Resolve"`). The refutation was tripping over the badge text, not the button. Fixed by scoping the check to the actual element with `has_element?(lv, "button", "Resolve")` (Floki-backed, matches only `<button>` elements) instead of a raw substring match on the full rendered page - the same fix applies to any future assertion pairing a status label with an action label that's a prefix of it.
+  - The "clicking the action button" test asserted on `render_click/1`'s own return value for the *post-click* status - but `advance_case_status/2` updates the stream only via the `{:updated, case}` PubSub broadcast landing back on this same LiveView's `handle_info/2`, which happens *after* `handle_event/3` has already replied with the click's diff (see the code comment on `handle_event("advance_status", ...)`). `render_click/1`'s return only reflects what `handle_event/3` itself changed (the flash), not what a subsequent `handle_info/2` does. Fixed by re-rendering (`has_element?(lv, ...)` again after the click) rather than asserting on the click's own return - the same ordering the existing "broadcasts a newly reported case to other viewers live" test already relies on, just applied to a LiveView updating itself via its own broadcast instead of a second viewer's.
+- Operational, not a code gotcha: testing this in-browser needs a role on your own account first, and there's no UI for that yet (see the decision above). From `iex -S mix`:
+
+  ```elixir
+  alias ZamHealthWatch.Accounts
+  user = Accounts.get_user_by_email("philsamakayi@gmail.com")
+  Accounts.assign_user_role(user, %{role: :district_officer})
+  ```
+
+  An already-open browser tab's LiveView won't pick up the new role until the page is reloaded - `current_scope` is captured once, at mount/connect time, not re-read live.
+
+**Status:** `mix test`-verified (222 tests, 0 failures) after fixing the three test bugs above (production code was correct on the first run - all three failures were in the new tests themselves). Role-gated case status transitions is closed. Remaining Iteration 1 gap: reporter identity in the case list.

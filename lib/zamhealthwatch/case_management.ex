@@ -154,6 +154,76 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
+  Returns the status a case would move to next in its one-directional
+  lifecycle (`:suspected` -> `:confirmed` -> `:resolved`), or `nil` once
+  `:resolved` - there's nowhere further to advance to.
+
+  `update_case_status/2` itself still allows setting *any* valid status
+  regardless of the current one (Iteration 1 deliberately left that
+  permissive at the data layer - see `Case.status_changeset/2` - since
+  there was no case-management screen yet to make a stricter rule
+  meaningful). Now that `CaseLive.Index` has one, this is that rule,
+  layered on top rather than tightened in the changeset itself, so a
+  future consumer that legitimately needs an arbitrary status set isn't
+  blocked by it.
+
+  ## Examples
+
+      iex> next_status(:suspected)
+      :confirmed
+
+      iex> next_status(:resolved)
+      nil
+
+  """
+  def next_status(:suspected), do: :confirmed
+  def next_status(:confirmed), do: :resolved
+  def next_status(:resolved), do: nil
+
+  @doc """
+  Advances a case to its next lifecycle status on behalf of a user
+  holding `role`.
+
+  Two checks happen here, not only in `CaseLive.Index`'s rendering - a
+  forged event can't skip either one, the same server-side-enforcement
+  precedent `with_reporter/2` already set for `reported_by_id`:
+
+    * `role` must be assigned (not `nil`) - any of `Accounts.User`'s
+      three roles qualifies. This slice doesn't yet distinguish *which*
+      role may do what (e.g. only `:moh_admin` resolving a case) - no
+      real use case has decided that yet, so it isn't guessed at here,
+      same reasoning this project has applied to every other
+      not-yet-needed distinction. Revisit once one exists.
+    * the case must actually have a next status (see `next_status/1`) -
+      a `:resolved` case is a terminal state.
+
+  Takes a plain `role` atom (or `nil`), not an `%Accounts.User{}` struct -
+  `CaseManagement` stays decoupled from `Accounts`'s schema the same way
+  it already is from `Geography.Facility`'s, so the caller (`CaseLive.Index`,
+  via `current_scope.user.role`) is what bridges the two contexts, not
+  this one reaching into the other's data directly.
+
+  ## Examples
+
+      iex> advance_case_status(case, :health_worker)
+      {:ok, %Case{}}
+
+      iex> advance_case_status(case, nil)
+      {:error, :unauthorized}
+
+      iex> advance_case_status(%Case{status: :resolved}, :health_worker)
+      {:error, :no_next_status}
+
+  """
+  def advance_case_status(%Case{} = case, role) do
+    cond do
+      is_nil(role) -> {:error, :unauthorized}
+      is_nil(next_status(case.status)) -> {:error, :no_next_status}
+      true -> update_case_status(case, %{status: next_status(case.status)})
+    end
+  end
+
+  @doc """
   Returns the total number of reported cases.
 
   ## Examples

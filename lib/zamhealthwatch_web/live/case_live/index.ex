@@ -66,6 +66,16 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
           </span>
         </:col>
         <:col :let={{_id, entry}} label="Reported">{time_ago(entry.inserted_at)}</:col>
+        <:col :let={{_id, entry}} label="Actions">
+          <.button
+            :if={can_advance_status?(@current_scope, entry.status)}
+            class="btn btn-xs"
+            phx-click="advance_status"
+            phx-value-id={entry.id}
+          >
+            {advance_label(entry.status)}
+          </.button>
+        </:col>
       </.table>
     </Layouts.app>
     """
@@ -113,6 +123,34 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
     end
   end
 
+  # `role` is read from `current_scope`, not trusted from client params -
+  # there's no form field to tamper with here, but the event handler
+  # below re-checks the same thing server-side anyway (CaseManagement.
+  # advance_case_status/2's own job), the same "don't trust the button
+  # being hidden" precedent with_reporter/2 already set for reported_by_id.
+  def handle_event("advance_status", %{"id" => id}, socket) do
+    case_record = CaseManagement.get_case!(id)
+    role = socket.assigns.current_scope.user.role
+
+    case CaseManagement.advance_case_status(case_record, role) do
+      {:ok, updated_case} ->
+        # No manual stream_insert here - the broadcast update_case_status/2
+        # already sent lands right back on this same LiveView's
+        # handle_info({:updated, _}, _) below, same "rely on the PubSub
+        # round-trip" pattern handle_event("save", ...) already uses for
+        # newly-created cases.
+        {:noreply,
+         put_flash(socket, :info, "Case moved to #{Phoenix.Naming.humanize(updated_case.status)}.")}
+
+      {:error, :unauthorized} ->
+        {:noreply,
+         put_flash(socket, :error, "You need an assigned role to change a case's status.")}
+
+      {:error, :no_next_status} ->
+        {:noreply, put_flash(socket, :error, "This case has no further status to move to.")}
+    end
+  end
+
   @impl true
   def handle_info({:created, %Case{} = case_record}, socket) do
     {:noreply,
@@ -147,6 +185,17 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   defp status_badge_class(:suspected), do: "badge-warning"
   defp status_badge_class(:confirmed), do: "badge-error"
   defp status_badge_class(:resolved), do: "badge-success"
+
+  # Mirrors CaseManagement.advance_case_status/2's own checks - shown
+  # here purely to decide whether to render the button at all. The
+  # context re-checks both the same way regardless, since hiding a
+  # button is a UI nicety, not an authorization boundary on its own.
+  defp can_advance_status?(current_scope, status) do
+    not is_nil(current_scope.user.role) and not is_nil(CaseManagement.next_status(status))
+  end
+
+  defp advance_label(:suspected), do: "Confirm"
+  defp advance_label(:confirmed), do: "Resolve"
 
   defp time_ago(datetime) do
     seconds = DateTime.diff(DateTime.utc_now(), datetime, :second)

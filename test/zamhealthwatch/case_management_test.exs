@@ -173,4 +173,52 @@ defmodule ZamHealthWatch.CaseManagementTest do
       |> ZamHealthWatch.Repo.update!()
     end
   end
+
+  describe "status transitions" do
+    import ZamHealthWatch.CaseManagementFixtures
+
+    test "next_status/1 moves :suspected to :confirmed" do
+      assert CaseManagement.next_status(:suspected) == :confirmed
+    end
+
+    test "next_status/1 moves :confirmed to :resolved" do
+      assert CaseManagement.next_status(:confirmed) == :resolved
+    end
+
+    test "next_status/1 has nothing after :resolved" do
+      assert CaseManagement.next_status(:resolved) == nil
+    end
+
+    test "advance_case_status/2 moves a :suspected case to :confirmed when a role is assigned" do
+      case = case_fixture()
+
+      assert {:ok, updated_case} = CaseManagement.advance_case_status(case, :health_worker)
+      assert updated_case.status == :confirmed
+    end
+
+    test "advance_case_status/2 moves a :confirmed case to :resolved when a role is assigned" do
+      case = case_fixture()
+      {:ok, confirmed_case} = CaseManagement.update_case_status(case, %{status: :confirmed})
+
+      assert {:ok, updated_case} =
+               CaseManagement.advance_case_status(confirmed_case, :moh_admin)
+
+      assert updated_case.status == :resolved
+    end
+
+    test "advance_case_status/2 rejects a nil role" do
+      case = case_fixture()
+
+      assert CaseManagement.advance_case_status(case, nil) == {:error, :unauthorized}
+      assert CaseManagement.get_case!(case.id).status == :suspected
+    end
+
+    test "advance_case_status/2 rejects a case with no next status, regardless of role" do
+      case = case_fixture()
+      {:ok, resolved_case} = CaseManagement.update_case_status(case, %{status: :resolved})
+
+      assert CaseManagement.advance_case_status(resolved_case, :district_officer) ==
+               {:error, :no_next_status}
+    end
+  end
 end
