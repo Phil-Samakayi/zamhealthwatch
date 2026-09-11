@@ -18,11 +18,6 @@ alias ZamHealthWatch.Repo
 # pick from CaseLive.Index's facility dropdown in dev - not exhaustive
 # reference data, just enough to actually exercise the app locally.
 #
-# Districts are seeded even though Facility.changeset/2 can't attach a
-# facility to one yet (district_id isn't cast - see docs/ITERATIONS.md,
-# Iteration 1's Epidemiology Dashboard decisions) - they're harmless to
-# have around now and save reseeding once that gap closes.
-#
 # Idempotent: safe to re-run (`mix run priv/repo/seeds.exs` again) without
 # creating duplicates, since neither `name` column has a unique constraint
 # to rely on for `Repo.insert!/2`'s usual upsert options.
@@ -40,15 +35,21 @@ end
 
 # Each facility now needs a `code` (Iteration 2: SmsReporting addresses
 # a facility by this short code from inside a plain-text SMS, not by
-# name or id) and, as of the GIS Mapping slice, gets an approximate
-# latitude/longitude too - town-centre coordinates for the town each
-# facility is actually in, not surveyed exact addresses (this is demo
-# seed data for MapLive.Index, not authoritative GPS). If you seeded
-# facilities before the `code` change, re-running this script won't
-# backfill it - `Repo.get_by(Facility, name: ...)` below will find the
-# old row by name and skip it. Run `mix ecto.reset` instead for a clean
-# slate; there's no real data here yet worth preserving over a backfill
-# migration for four rows.
+# name or id) and an approximate latitude/longitude too (GIS Mapping -
+# town-centre coordinates for the town each facility is actually in,
+# not surveyed exact addresses - this is demo seed data for
+# MapLive.Index, not authoritative GPS).
+#
+# Upsert by name, not "skip if the name already exists": a facility
+# schema field added after your DB was first seeded (this has already
+# happened twice now - `code`, then `latitude`/`longitude`) needs to
+# land on the row that's already there, not silently stay nil forever
+# because `Repo.get_by(Facility, name: ...)` found something and moved
+# on. `mix run priv/repo/seeds.exs` safely backfills new facility
+# fields onto existing rows without touching `users` at all - it used
+# to mean `mix ecto.reset` instead, which also wipes whichever account
+# you're logged in as (see docs/ITERATIONS.md's GIS Mapping entry for
+# how that was found).
 facilities = [
   {"University Teaching Hospital", "UTH", -15.4067, 28.3229},
   {"Kabwata Clinic", "KBW", -15.4300, 28.2900},
@@ -57,9 +58,11 @@ facilities = [
 ]
 
 for {name, code, lat, lng} <- facilities do
-  unless Repo.get_by(Facility, name: name) do
-    {:ok, _facility} =
-      Geography.create_facility(%{name: name, code: code, latitude: lat, longitude: lng})
+  attrs = %{name: name, code: code, latitude: lat, longitude: lng}
+
+  case Repo.get_by(Facility, name: name) do
+    nil -> {:ok, _facility} = Geography.create_facility(attrs)
+    facility -> {:ok, _facility} = Geography.update_facility(facility, attrs)
   end
 end
 
