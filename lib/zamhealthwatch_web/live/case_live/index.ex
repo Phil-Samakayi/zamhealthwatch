@@ -6,14 +6,6 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
 
-  @disease_options [
-    {"Cholera", :cholera},
-    {"Malaria", :malaria},
-    {"Typhoid", :typhoid},
-    {"COVID-19", :covid19},
-    {"Measles", :measles}
-  ]
-
   @impl true
   def render(assigns) do
     ~H"""
@@ -57,7 +49,7 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
       </p>
 
       <.table :if={@case_count > 0} id="cases" rows={@streams.cases}>
-        <:col :let={{_id, entry}} label="Disease">{disease_label(entry.disease)}</:col>
+        <:col :let={{_id, entry}} label="Disease">{Case.disease_label(entry.disease)}</:col>
         <:col :let={{_id, entry}} label="Facility">
           {Map.get(@facilities_by_id, entry.facility_id, "Unknown facility")}
         </:col>
@@ -94,7 +86,7 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
 
     socket =
       socket
-      |> assign(:disease_options, @disease_options)
+      |> assign(:disease_options, Case.disease_options())
       |> assign(:facility_options, Enum.map(facilities, &{&1.name, &1.id}))
       |> assign(:facilities_by_id, Map.new(facilities, &{&1.id, &1.name}))
       |> assign(:reporters_by_id, Map.new(Accounts.list_users(), &{&1.id, reporter_label(&1)}))
@@ -179,12 +171,6 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
 
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
     assign(socket, :form, to_form(changeset, as: "case"))
-  end
-
-  defp disease_label(disease) do
-    Enum.find_value(@disease_options, Phoenix.Naming.humanize(disease), fn {label, value} ->
-      value == disease && label
-    end)
   end
 
   defp status_badge_class(:suspected), do: "badge-warning"

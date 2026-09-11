@@ -2,20 +2,8 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
   use ZamHealthWatchWeb, :live_view
 
   alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
-
-  # Same "each LiveView owns its own display list" precedent as
-  # CaseLive.Index's @disease_options - duplicated here rather than
-  # shared. Revisit (extract to one place, e.g. a Case.disease_options/0)
-  # only once a third consumer needs the same list; two isn't a pattern
-  # yet.
-  @disease_options [
-    {"Cholera", :cholera},
-    {"Malaria", :malaria},
-    {"Typhoid", :typhoid},
-    {"COVID-19", :covid19},
-    {"Measles", :measles}
-  ]
 
   @status_options [
     {"Suspected", :suspected},
@@ -112,7 +100,7 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
 
     socket =
       socket
-      |> assign(:disease_options, @disease_options)
+      |> assign(:disease_options, Case.disease_options())
       |> assign(:status_options, @status_options)
       |> assign_stats()
 

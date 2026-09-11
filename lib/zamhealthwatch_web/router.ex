@@ -84,6 +84,14 @@ defmodule ZamHealthWatchWeb.Router do
       # Same reasoning again - an internal analytical view over the
       # same case data, no separate public route/auth model yet.
       live "/risk", RiskLive.Index, :index
+
+      # Requesting a test is open to any authenticated user, same as
+      # case reporting - only *recording a result* is role-gated, at
+      # the row level inside LabLive.Index itself (mirrors CaseLive.Index's
+      # role-gated advance-status button), not at the route level, so
+      # this stays in the shared live_session rather than the
+      # :require_moh_admin one below.
+      live "/labs", LabLive.Index, :index
     end
 
     # A separate live_session, not folded into :require_authenticated_user
