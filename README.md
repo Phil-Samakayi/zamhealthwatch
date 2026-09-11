@@ -47,3 +47,7 @@ Port 4000 is what Phoenix will use once there's an app to run; Postgres listens 
 - [`docs/ZamHealthWatch_Project_Brief.md`](docs/ZamHealthWatch_Project_Brief.md) — the live spec (vision, scope, architecture).
 - [`docs/ITERATIONS.md`](docs/ITERATIONS.md) — the build log, updated per iteration.
 - [`docs/archive/FYP_Proposal_Original.md`](docs/archive/FYP_Proposal_Original.md) — the original UNZA Final Year Project proposal this evolved from. Superseded; kept for history only.
+
+## License
+
+All rights reserved. This repository is public so the code, architecture, and build history are visible for portfolio and evaluation purposes — it is not open source. No permission is granted to use, copy, modify, or deploy this software without the copyright holder's prior written consent. See [`LICENSE`](LICENSE).
