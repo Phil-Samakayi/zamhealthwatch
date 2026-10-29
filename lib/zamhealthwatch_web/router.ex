@@ -112,6 +112,22 @@ defmodule ZamHealthWatchWeb.Router do
       # no role gate, and there's no second, role-gated action on this
       # screen either (see HospitalCapacity's moduledoc).
       live "/hospitals", HospitalLive.Index, :index
+
+      # Guidance content is read-only reference material, open to any
+      # authenticated user, same as every other screen in this
+      # live_session - no role gate, nothing facility-specific about
+      # it (see Guidance's own moduledoc). Both routes map to the same
+      # live_action (:index); handle_params/3 tells them apart by
+      # whether a "disease" path param is present.
+      live "/guidance", GuidanceLive.Index, :index
+      live "/guidance/:disease", GuidanceLive.Index, :index
+
+      # The Health Worker Portal landing page - facility-scoped by the
+      # logged-in user's own `facility_id` (see PortalLive.Index's own
+      # moduledoc/comments for the "no facility assigned yet" state).
+      # No role gate - any authenticated user, same as everything else
+      # in this live_session.
+      live "/portal", PortalLive.Index, :index
     end
 
     # A separate live_session, not folded into :require_authenticated_user
@@ -124,9 +140,27 @@ defmodule ZamHealthWatchWeb.Router do
     live_session :require_moh_admin,
       on_mount: [{ZamHealthWatchWeb.UserAuth, :require_moh_admin}] do
       live "/admin/users", AdminLive.Index, :index
+
+      # National Reporting's on-screen preview (Iteration 13) - the
+      # brief's own "MOH-level consumption" framing, same role gate as
+      # /admin/users above. Its CSV download sits in a separate scope
+      # below, not in this live_session - a live_session only wraps
+      # LiveView routes, and the download is a plain controller action
+      # (see NationalReportingController's own moduledoc for why).
+      live "/reports/national", NationalReportingLive.Index, :index
     end
 
     post "/users/update-password", UserSessionController, :update_password
+  end
+
+  # Same :require_moh_admin gate as the live_session above, via its
+  # controller-pipeline equivalent (see UserAuth.require_moh_admin/2) -
+  # a plain `get`, not a `live`, since a browser "Save As" download
+  # needs a real HTTP response, not a LiveView socket push.
+  scope "/", ZamHealthWatchWeb do
+    pipe_through [:browser, :require_moh_admin]
+
+    get "/reports/national.csv", NationalReportingController, :download
   end
 
   scope "/", ZamHealthWatchWeb do
