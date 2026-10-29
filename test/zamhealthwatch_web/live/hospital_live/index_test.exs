@@ -148,6 +148,84 @@ defmodule ZamHealthWatchWeb.HospitalLive.IndexTest do
     end
   end
 
+  describe "facility scoping for health workers" do
+    test "an unassigned health_worker sees a get-assigned message instead of the form", %{
+      conn: conn
+    } do
+      user = user_fixture() |> set_role(:health_worker)
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/hospitals")
+
+      assert html =~ "haven&#39;t been assigned to a facility yet"
+      assert html =~ "Manage users"
+      refute html =~ "id=\"capacity-form\""
+    end
+
+    test "an assigned health_worker only sees capacity reports at their own facility", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture(%{name: "Ndola Teaching Hospital"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      capacity_report_fixture(%{facility_id: facility.id, total_beds: 100, occupied_beds: 40})
+      capacity_report_fixture(%{facility_id: other_facility.id, total_beds: 50, occupied_beds: 10})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/hospitals")
+
+      assert html =~ "Kabwata Clinic"
+      refute html =~ "Ndola Teaching Hospital"
+    end
+
+    test "an assigned health_worker's form shows their facility locked, not a select", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/hospitals")
+
+      assert html =~ "Kabwata Clinic"
+      refute has_element?(lv, "select[name=\"capacity_report[facility_id]\"]")
+    end
+
+    test "a forged facility_id is overridden with the health_worker's own facility", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/hospitals")
+
+      render_submit(lv, "save", %{
+        "capacity_report" => %{
+          "facility_id" => other_facility.id,
+          "total_beds" => "100",
+          "occupied_beds" => "60",
+          "icu_beds_total" => "10",
+          "icu_beds_occupied" => "5",
+          "admissions_today" => "12"
+        }
+      })
+
+      assert [report] = HospitalCapacity.list_capacity_reports()
+      assert report.facility_id == facility.id
+    end
+  end
+
   describe "capacity status badge" do
     test "shows an adequate badge below 80% bed occupancy", %{conn: conn} do
       facility = facility_fixture()

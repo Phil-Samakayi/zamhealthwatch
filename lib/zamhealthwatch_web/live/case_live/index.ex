@@ -17,7 +17,21 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
         </:subtitle>
       </.header>
 
-      <.form for={@form} id="case-form" phx-submit="save" phx-change="validate">
+      <div :if={@scope == :unassigned} class="alert alert-info">
+        <.icon name="hero-information-circle" class="size-5 shrink-0" />
+        <span>
+          You haven't been assigned to a facility yet. Ask an MOH admin to assign you from
+          <.link navigate={~p"/admin/users"} class="link">Manage users</.link>.
+        </span>
+      </div>
+
+      <.form
+        :if={@scope != :unassigned}
+        for={@form}
+        id="case-form"
+        phx-submit="save"
+        phx-change="validate"
+      >
         <.input
           field={@form[:disease]}
           type="select"
@@ -26,6 +40,15 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
           prompt="Select a disease"
         />
         <.input
+          :if={@locked_facility}
+          type="text"
+          name="case[facility_display]"
+          label="Facility"
+          value={@locked_facility.name}
+          disabled
+        />
+        <.input
+          :if={!@locked_facility}
           field={@form[:facility_id]}
           type="select"
           label="Facility"
@@ -81,11 +104,14 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   def mount(_params, _session, socket) do
     if connected?(socket), do: CaseManagement.subscribe_cases()
 
+    scope = facility_scope(socket.assigns.current_scope.user)
     facilities = Geography.list_facilities()
-    cases = CaseManagement.list_cases()
+    cases = list_cases(scope)
 
     socket =
       socket
+      |> assign(:scope, scope)
+      |> assign(:locked_facility, locked_facility(scope))
       |> assign(:disease_options, Case.disease_options())
       |> assign(:facility_options, Enum.map(facilities, &{&1.name, &1.id}))
       |> assign(:facilities_by_id, Map.new(facilities, &{&1.id, &1.name}))
@@ -97,26 +123,76 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
     {:ok, socket}
   end
 
+  # A health_worker only ever sees/reports cases at their own facility;
+  # every other role (including an unassigned nil role) is unrestricted
+  # on this screen - see docs/ITERATIONS.md's Health Worker Portal
+  # facility-scoping decision. `:unassigned` is a health_worker with no
+  # `facility_id` yet (nothing to scope to), distinct from
+  # `:unrestricted` so the empty state matches PortalLive.Index's own
+  # "get assigned" message rather than silently falling back to
+  # showing everything. Same shape duplicated (not shared) across
+  # DrugLive.Index/HospitalLive.Index/LabLive.Index/VaccinationLive.Index,
+  # same small-per-module-helper convention `with_reporter/2` already set.
+  defp facility_scope(%{role: :health_worker, facility_id: nil}), do: :unassigned
+  defp facility_scope(%{role: :health_worker, facility_id: facility_id}), do: {:locked, facility_id}
+  defp facility_scope(_user), do: :unrestricted
+
+  defp list_cases(:unrestricted), do: CaseManagement.list_cases()
+  defp list_cases(:unassigned), do: []
+  defp list_cases({:locked, facility_id}), do: CaseManagement.list_cases_by_facility(facility_id)
+
+  # Same "don't let a display-only lookup crash the page" fallback
+  # PortalLive.Index's own fetch_facility/1 already applies.
+  defp locked_facility({:locked, facility_id}) do
+    Geography.get_facility!(facility_id)
+  rescue
+    Ecto.NoResultsError -> nil
+  end
+
+  defp locked_facility(_scope), do: nil
+
+  # Forces `facility_id` to the health worker's own facility regardless
+  # of what the client submits - same server-side-enforcement precedent
+  # `with_reporter/2` already set for `reported_by_id`, applied here
+  # because a locked facility is a real authorization boundary (the
+  # user's own choice to lock the case-report form, not just filter its
+  # list), not only a UI nicety.
+  defp apply_scope(case_params, {:locked, facility_id}),
+    do: Map.put(case_params, "facility_id", facility_id)
+
+  defp apply_scope(case_params, _scope), do: case_params
+
+  defp scoped_params(case_params, socket) do
+    case_params |> with_reporter(socket) |> apply_scope(socket.assigns.scope)
+  end
+
   @impl true
   def handle_event("validate", %{"case" => case_params}, socket) do
     changeset =
       %Case{}
-      |> CaseManagement.change_case(with_reporter(case_params, socket))
+      |> CaseManagement.change_case(scoped_params(case_params, socket))
       |> Map.put(:action, :validate)
 
     {:noreply, assign_form(socket, changeset)}
   end
 
   def handle_event("save", %{"case" => case_params}, socket) do
-    case CaseManagement.create_case(with_reporter(case_params, socket)) do
-      {:ok, _case} ->
+    case socket.assigns.scope do
+      :unassigned ->
         {:noreply,
-         socket
-         |> put_flash(:info, "Case reported.")
-         |> assign_form(CaseManagement.change_case(%Case{}))}
+         put_flash(socket, :error, "You need to be assigned to a facility before reporting a case.")}
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign_form(socket, changeset)}
+      _scope ->
+        case CaseManagement.create_case(scoped_params(case_params, socket)) do
+          {:ok, _case} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Case reported.")
+             |> assign_form(CaseManagement.change_case(%Case{}))}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, assign_form(socket, changeset)}
+        end
     end
   end
 

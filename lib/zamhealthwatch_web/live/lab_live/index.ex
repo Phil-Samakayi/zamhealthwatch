@@ -21,7 +21,15 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
         </:subtitle>
       </.header>
 
-      <.form for={@form} id="lab-test-form" phx-submit="save">
+      <div :if={@scope == :unassigned} class="alert alert-info">
+        <.icon name="hero-information-circle" class="size-5 shrink-0" />
+        <span>
+          You haven't been assigned to a facility yet. Ask an MOH admin to assign you from
+          <.link navigate={~p"/admin/users"} class="link">Manage users</.link>.
+        </span>
+      </div>
+
+      <.form :if={@scope != :unassigned} for={@form} id="lab-test-form" phx-submit="save">
         <.input
           field={@form[:case_id]}
           type="select"
@@ -95,13 +103,15 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
   def mount(_params, _session, socket) do
     if connected?(socket), do: LabReporting.subscribe_lab_tests()
 
-    cases = CaseManagement.list_cases()
+    scope = facility_scope(socket.assigns.current_scope.user)
+    cases = list_cases(scope)
     facilities = Geography.list_facilities()
     facilities_by_id = Map.new(facilities, &{&1.id, &1.name})
-    lab_tests = LabReporting.list_lab_tests()
+    lab_tests = list_lab_tests(scope)
 
     socket =
       socket
+      |> assign(:scope, scope)
       |> assign(:cases_by_id, Map.new(cases, &{&1.id, &1}))
       |> assign(:facilities_by_id, facilities_by_id)
       |> assign(:case_options, Enum.map(cases, &{case_option_label(&1, facilities_by_id), &1.id}))
@@ -112,17 +122,39 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
     {:ok, socket}
   end
 
+  # Same role-based scope CaseLive.Index establishes (see its own
+  # comment for the full reasoning) - duplicated here rather than
+  # shared, same small-per-module-helper convention `with_reporter/2`
+  # already set.
+  defp facility_scope(%{role: :health_worker, facility_id: nil}), do: :unassigned
+  defp facility_scope(%{role: :health_worker, facility_id: facility_id}), do: {:locked, facility_id}
+  defp facility_scope(_user), do: :unrestricted
+
+  defp list_cases(:unrestricted), do: CaseManagement.list_cases()
+  defp list_cases(:unassigned), do: []
+  defp list_cases({:locked, facility_id}), do: CaseManagement.list_cases_by_facility(facility_id)
+
+  defp list_lab_tests(:unrestricted), do: LabReporting.list_lab_tests()
+  defp list_lab_tests(:unassigned), do: []
+  defp list_lab_tests({:locked, facility_id}), do: LabReporting.list_lab_tests_by_facility(facility_id)
+
   @impl true
   def handle_event("save", %{"lab_test" => params}, socket) do
-    case LabReporting.request_test(with_requester(params, socket)) do
-      {:ok, _lab_test} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Lab test requested.")
-         |> assign_form(LabReporting.change_lab_test(%LabTest{}))}
+    case check_scope(params, socket.assigns.scope) do
+      :ok ->
+        case LabReporting.request_test(with_requester(params, socket)) do
+          {:ok, _lab_test} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Lab test requested.")
+             |> assign_form(LabReporting.change_lab_test(%LabTest{}))}
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign_form(socket, changeset)}
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, assign_form(socket, changeset)}
+        end
+
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
     end
   end
 
@@ -165,6 +197,33 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
         end
     end
   end
+
+  # There's no `facility_id` field on this form to lock the way
+  # CaseLive.Index/DrugLive.Index/HospitalLive.Index lock theirs - the
+  # thing being chosen is a `case_id`, and which facility that implies
+  # comes from the case itself. The `case_options` dropdown is already
+  # filtered to the worker's own facility in `mount/3`, but (same
+  # "don't trust the button being hidden" precedent every other
+  # handler in this project follows) a forged event could still submit
+  # a `case_id` for a different facility, so this re-checks the chosen
+  # case's actual `facility_id` server-side before it ever reaches
+  # `LabReporting.request_test/1`.
+  defp check_scope(_params, :unrestricted), do: :ok
+
+  defp check_scope(_params, :unassigned),
+    do: {:error, "You need to be assigned to a facility before requesting a lab test."}
+
+  defp check_scope(%{"case_id" => case_id}, {:locked, facility_id}) do
+    case CaseManagement.get_case!(case_id) do
+      %{facility_id: ^facility_id} -> :ok
+      _other_facility -> {:error, "You can only request tests for cases at your own facility."}
+    end
+  rescue
+    Ecto.NoResultsError -> {:error, "That case could not be found."}
+  end
+
+  defp check_scope(_params, {:locked, _facility_id}),
+    do: {:error, "Select a case before requesting a test."}
 
   @impl true
   def handle_info({:created, %LabTest{} = lab_test}, socket) do

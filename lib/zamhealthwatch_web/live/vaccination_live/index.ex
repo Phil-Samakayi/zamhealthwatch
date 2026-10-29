@@ -18,8 +18,35 @@ defmodule ZamHealthWatchWeb.VaccinationLive.Index do
         </:subtitle>
       </.header>
 
-      <.form for={@form} id="vaccination-form" phx-submit="save">
+      <div :if={@scope == :unassigned} class="alert alert-info">
+        <.icon name="hero-information-circle" class="size-5 shrink-0" />
+        <span>
+          You haven't been assigned to a facility yet. Ask an MOH admin to assign you from
+          <.link navigate={~p"/admin/users"} class="link">Manage users</.link>.
+        </span>
+      </div>
+
+      <div :if={@scope == :no_district} class="alert alert-warning">
+        <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+        <span>Your facility doesn't have a district set yet - ask an MOH admin to add one.</span>
+      </div>
+
+      <.form
+        :if={@scope not in [:unassigned, :no_district]}
+        for={@form}
+        id="vaccination-form"
+        phx-submit="save"
+      >
         <.input
+          :if={@locked_district}
+          type="text"
+          name="vaccination_record[district_display]"
+          label="District"
+          value={@locked_district.name}
+          disabled
+        />
+        <.input
+          :if={!@locked_district}
           field={@form[:district_id]}
           type="select"
           label="District"
@@ -71,11 +98,15 @@ defmodule ZamHealthWatchWeb.VaccinationLive.Index do
   def mount(_params, _session, socket) do
     if connected?(socket), do: VaccinationMonitoring.subscribe_vaccination_records()
 
+    scope = socket.assigns.current_scope.user |> facility_scope() |> district_scope()
+
     districts = Geography.list_districts()
-    records = VaccinationMonitoring.list_vaccination_records()
+    records = list_records(scope)
 
     socket =
       socket
+      |> assign(:scope, scope)
+      |> assign(:locked_district, locked_district(scope, districts))
       |> assign(:districts_by_id, Map.new(districts, &{&1.id, &1}))
       |> assign(:district_options, Enum.map(districts, &{&1.name, &1.id}))
       |> assign(:antigen_options, VaccinationRecord.antigen_options())
@@ -86,17 +117,84 @@ defmodule ZamHealthWatchWeb.VaccinationLive.Index do
     {:ok, socket}
   end
 
+  # Same role-based scope CaseLive.Index/DrugLive.Index/HospitalLive.Index/
+  # LabLive.Index already establish (see CaseLive.Index's own comment
+  # for the full reasoning) - duplicated here, same convention.
+  defp facility_scope(%{role: :health_worker, facility_id: nil}), do: :unassigned
+  defp facility_scope(%{role: :health_worker, facility_id: facility_id}), do: {:locked, facility_id}
+  defp facility_scope(_user), do: :unrestricted
+
+  # `VaccinationRecord` is district-grain, not facility-grain (see
+  # VaccinationMonitoring's moduledoc), so this screen immediately
+  # narrows a `{:locked, facility_id}` scope down to the *district that
+  # facility sits in*. `district_id` on `Geography.Facility` is
+  # optional (no facility-management UI yet to guarantee it's set), so
+  # a facility with no district on record gets its own distinct
+  # `:no_district` state rather than silently falling back to either
+  # "show everything" or "show nothing with the wrong explanation".
+  defp district_scope(:unrestricted), do: :unrestricted
+  defp district_scope(:unassigned), do: :unassigned
+
+  defp district_scope({:locked, facility_id}) do
+    case fetch_facility(facility_id) do
+      %{district_id: district_id} when not is_nil(district_id) -> {:locked, district_id}
+      _no_district -> :no_district
+    end
+  end
+
+  defp fetch_facility(facility_id) do
+    Geography.get_facility!(facility_id)
+  rescue
+    Ecto.NoResultsError -> nil
+  end
+
+  defp list_records(:unrestricted), do: VaccinationMonitoring.list_vaccination_records()
+  defp list_records(:unassigned), do: []
+  defp list_records(:no_district), do: []
+
+  defp list_records({:locked, district_id}),
+    do: VaccinationMonitoring.list_vaccination_records_by_district(district_id)
+
+  defp locked_district({:locked, district_id}, districts),
+    do: Enum.find(districts, &(&1.id == district_id))
+
+  defp locked_district(_scope, _districts), do: nil
+
+  defp apply_scope(params, {:locked, district_id}), do: Map.put(params, "district_id", district_id)
+  defp apply_scope(params, _scope), do: params
+
   @impl true
   def handle_event("save", %{"vaccination_record" => params}, socket) do
-    case VaccinationMonitoring.record_vaccination(with_reporter(params, socket)) do
-      {:ok, _record} ->
+    case socket.assigns.scope do
+      :unassigned ->
         {:noreply,
-         socket
-         |> put_flash(:info, "Vaccination coverage recorded.")
-         |> assign_form(VaccinationMonitoring.change_vaccination_record(%VaccinationRecord{}))}
+         put_flash(
+           socket,
+           :error,
+           "You need to be assigned to a facility before recording coverage."
+         )}
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign_form(socket, changeset)}
+      :no_district ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Your facility doesn't have a district set yet - ask an MOH admin to add one."
+         )}
+
+      scope ->
+        scoped_params = params |> with_reporter(socket) |> apply_scope(scope)
+
+        case VaccinationMonitoring.record_vaccination(scoped_params) do
+          {:ok, _record} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Vaccination coverage recorded.")
+             |> assign_form(VaccinationMonitoring.change_vaccination_record(%VaccinationRecord{}))}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, assign_form(socket, changeset)}
+        end
     end
   end
 

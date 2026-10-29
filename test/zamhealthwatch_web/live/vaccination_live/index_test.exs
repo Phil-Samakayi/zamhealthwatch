@@ -145,6 +145,107 @@ defmodule ZamHealthWatchWeb.VaccinationLive.IndexTest do
     end
   end
 
+  describe "facility scoping for health workers" do
+    test "an unassigned health_worker sees a get-assigned message instead of the form", %{
+      conn: conn
+    } do
+      user = user_fixture() |> set_role(:health_worker)
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/vaccinations")
+
+      assert html =~ "haven&#39;t been assigned to a facility yet"
+      assert html =~ "Manage users"
+      refute html =~ "id=\"vaccination-form\""
+    end
+
+    test "a health_worker whose facility has no district set sees a distinct message", %{
+      conn: conn
+    } do
+      facility = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/vaccinations")
+
+      assert html =~ "doesn&#39;t have a district set yet"
+      refute html =~ "id=\"vaccination-form\""
+    end
+
+    test "an assigned health_worker only sees coverage records for their facility's district", %{
+      conn: conn
+    } do
+      district = district_fixture(%{name: "Lusaka"})
+      other_district = district_fixture(%{name: "Ndola"})
+      facility = facility_fixture(%{district_id: district.id})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      vaccination_record_fixture(%{district_id: district.id, antigen: :bcg})
+      vaccination_record_fixture(%{district_id: other_district.id, antigen: :opv})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/vaccinations")
+
+      # `antigen` isn't a reliable isolation signal - the "Antigen"
+      # <select> always lists every antigen (including "OPV (Polio)")
+      # as a choice for a *new* record, regardless of what's already in
+      # the scoped list below it. The "N submitted so far" count and
+      # the other district's own name (absent once the district field
+      # is locked) are what actually reflect the scoped query.
+      assert html =~ "1 record submitted so far."
+      refute html =~ "Ndola"
+    end
+
+    test "an assigned health_worker's form shows their district locked, not a select", %{
+      conn: conn
+    } do
+      district = district_fixture(%{name: "Lusaka"})
+      facility = facility_fixture(%{district_id: district.id})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/vaccinations")
+
+      assert html =~ "Lusaka"
+      refute has_element?(lv, "select[name=\"vaccination_record[district_id]\"]")
+    end
+
+    test "a forged district_id is overridden with the health_worker's own district", %{
+      conn: conn
+    } do
+      district = district_fixture()
+      other_district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/vaccinations")
+
+      render_submit(lv, "save", %{
+        "vaccination_record" => %{
+          "district_id" => other_district.id,
+          "antigen" => "bcg",
+          "campaign" => "Routine",
+          "doses_administered" => "10",
+          "target_population" => "20"
+        }
+      })
+
+      assert [record] = VaccinationMonitoring.list_vaccination_records()
+      assert record.district_id == district.id
+    end
+  end
+
   describe "coverage badge" do
     test "shows a success badge at or above 80% coverage", %{conn: conn} do
       district = district_fixture()

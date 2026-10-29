@@ -141,6 +141,87 @@ defmodule ZamHealthWatchWeb.DrugLive.IndexTest do
     end
   end
 
+  describe "facility scoping for health workers" do
+    test "an unassigned health_worker sees a get-assigned message instead of the form", %{
+      conn: conn
+    } do
+      user = user_fixture() |> set_role(:health_worker)
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/drugs")
+
+      assert html =~ "haven&#39;t been assigned to a facility yet"
+      assert html =~ "Manage users"
+      refute html =~ "id=\"drug-stock-form\""
+    end
+
+    test "an assigned health_worker only sees drug stock at their own facility", %{conn: conn} do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture(%{name: "Ndola Teaching Hospital"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      drug_stock_fixture(%{facility_id: facility.id, medicine: :ors})
+      drug_stock_fixture(%{facility_id: other_facility.id, medicine: :al})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/drugs")
+
+      # `medicine` isn't a reliable isolation signal - the "Medicine"
+      # <select> always lists every medicine (including
+      # "Artemether-Lumefantrine") as a choice for a *new* record,
+      # regardless of what's already in the scoped list below it. The
+      # "N submitted so far" count and the other facility's own name
+      # (absent once the facility field is locked) are what actually
+      # reflect the scoped query.
+      assert html =~ "1 record submitted so far."
+      refute html =~ "Ndola Teaching Hospital"
+    end
+
+    test "an assigned health_worker's form shows their facility locked, not a select", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/drugs")
+
+      assert html =~ "Kabwata Clinic"
+      refute has_element?(lv, "select[name=\"drug_stock[facility_id]\"]")
+    end
+
+    test "a forged facility_id is overridden with the health_worker's own facility", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/drugs")
+
+      render_submit(lv, "save", %{
+        "drug_stock" => %{
+          "facility_id" => other_facility.id,
+          "medicine" => "al",
+          "quantity_on_hand" => "30",
+          "reorder_level" => "50"
+        }
+      })
+
+      assert [stock] = DrugAvailability.list_drug_stocks()
+      assert stock.facility_id == facility.id
+    end
+  end
+
   describe "stock status badge" do
     test "shows a shortage badge when quantity is below reorder level", %{conn: conn} do
       facility = facility_fixture()

@@ -151,6 +151,102 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
     end
   end
 
+  describe "facility scoping for health workers" do
+    test "an unassigned health_worker sees a get-assigned message instead of the form", %{
+      conn: conn
+    } do
+      user = user_fixture() |> set_role(:health_worker)
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      assert html =~ "haven&#39;t been assigned to a facility yet"
+      assert html =~ "Manage users"
+      refute html =~ "id=\"case-form\""
+    end
+
+    test "an assigned health_worker only sees cases at their own facility", %{conn: conn} do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture(%{name: "Ndola Teaching Hospital"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      case_fixture(%{facility_id: facility.id, disease: :cholera})
+      _other_case = case_fixture(%{facility_id: other_facility.id, disease: :measles})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      # `disease` isn't a reliable isolation signal here - the "Disease"
+      # <select> always lists every disease (including "Measles") as a
+      # choice for a *new* report, regardless of what's already in the
+      # scoped list below it. The "N reported so far" count and the
+      # other facility's own name (absent once the facility field is
+      # locked - see the "shows their facility locked" test below) are
+      # what actually reflect the scoped query.
+      assert html =~ "1 case reported so far."
+      refute html =~ "Ndola Teaching Hospital"
+    end
+
+    test "an assigned health_worker's form shows their facility locked, not a select", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      assert html =~ "Kabwata Clinic"
+      refute has_element?(lv, "select[name=\"case[facility_id]\"]")
+    end
+
+    test "a forged facility_id is overridden with the health_worker's own facility", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      render_submit(lv, "save", %{
+        "case" => %{"disease" => "cholera", "facility_id" => other_facility.id}
+      })
+
+      assert [reported_case] = CaseManagement.list_cases()
+      assert reported_case.facility_id == facility.id
+    end
+
+    test "district_officer and moh_admin remain unrestricted across facilities", %{conn: conn} do
+      facility = facility_fixture()
+      other_facility = facility_fixture()
+      user = user_fixture() |> set_role(:district_officer)
+
+      case_fixture(%{facility_id: facility.id, disease: :cholera})
+      case_fixture(%{facility_id: other_facility.id, disease: :measles})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      # Both cases' facilities appear in the (unrestricted) "Facility"
+      # select regardless of scoping, so the count is what actually
+      # proves both rows landed in the scoped list, not just that both
+      # facilities exist in the system.
+      assert html =~ "2 cases reported so far."
+    end
+  end
+
   describe "case status transitions" do
     setup %{conn: conn} do
       facility = facility_fixture(%{name: "Test Clinic"})
@@ -176,7 +272,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       facility: facility
     } do
       case = case_fixture(%{facility_id: facility.id})
-      user = user_fixture() |> set_role(:health_worker)
+      user = user_fixture() |> set_role(:health_worker, facility.id)
 
       {:ok, lv, _html} =
         conn
@@ -232,7 +328,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       facility: facility
     } do
       case = case_fixture(%{facility_id: facility.id})
-      user = user_fixture() |> set_role(:health_worker)
+      user = user_fixture() |> set_role(:health_worker, facility.id)
 
       {:ok, lv, _html} =
         conn

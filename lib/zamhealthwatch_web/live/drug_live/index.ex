@@ -18,8 +18,25 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
         </:subtitle>
       </.header>
 
-      <.form for={@form} id="drug-stock-form" phx-submit="save">
+      <div :if={@scope == :unassigned} class="alert alert-info">
+        <.icon name="hero-information-circle" class="size-5 shrink-0" />
+        <span>
+          You haven't been assigned to a facility yet. Ask an MOH admin to assign you from
+          <.link navigate={~p"/admin/users"} class="link">Manage users</.link>.
+        </span>
+      </div>
+
+      <.form :if={@scope != :unassigned} for={@form} id="drug-stock-form" phx-submit="save">
         <.input
+          :if={@locked_facility}
+          type="text"
+          name="drug_stock[facility_display]"
+          label="Facility"
+          value={@locked_facility.name}
+          disabled
+        />
+        <.input
+          :if={!@locked_facility}
           field={@form[:facility_id]}
           type="select"
           label="Facility"
@@ -69,11 +86,14 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
   def mount(_params, _session, socket) do
     if connected?(socket), do: DrugAvailability.subscribe_drug_stocks()
 
+    scope = facility_scope(socket.assigns.current_scope.user)
     facilities = Geography.list_facilities()
-    stocks = DrugAvailability.list_drug_stocks()
+    stocks = list_stocks(scope)
 
     socket =
       socket
+      |> assign(:scope, scope)
+      |> assign(:locked_facility, locked_facility(scope))
       |> assign(:facilities_by_id, Map.new(facilities, &{&1.id, &1}))
       |> assign(:facility_options, Enum.map(facilities, &{&1.name, &1.id}))
       |> assign(:medicine_options, DrugStock.medicine_options())
@@ -84,17 +104,49 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
     {:ok, socket}
   end
 
+  # Same role-based scope CaseLive.Index establishes (see its own
+  # comment for the full reasoning) - duplicated here rather than
+  # shared, same small-per-module-helper convention `with_reporter/2`
+  # already set.
+  defp facility_scope(%{role: :health_worker, facility_id: nil}), do: :unassigned
+  defp facility_scope(%{role: :health_worker, facility_id: facility_id}), do: {:locked, facility_id}
+  defp facility_scope(_user), do: :unrestricted
+
+  defp list_stocks(:unrestricted), do: DrugAvailability.list_drug_stocks()
+  defp list_stocks(:unassigned), do: []
+  defp list_stocks({:locked, facility_id}), do: DrugAvailability.list_drug_stocks_by_facility(facility_id)
+
+  defp locked_facility({:locked, facility_id}) do
+    Geography.get_facility!(facility_id)
+  rescue
+    Ecto.NoResultsError -> nil
+  end
+
+  defp locked_facility(_scope), do: nil
+
+  defp apply_scope(params, {:locked, facility_id}), do: Map.put(params, "facility_id", facility_id)
+  defp apply_scope(params, _scope), do: params
+
   @impl true
   def handle_event("save", %{"drug_stock" => params}, socket) do
-    case DrugAvailability.record_stock(with_reporter(params, socket)) do
-      {:ok, _stock} ->
+    case socket.assigns.scope do
+      :unassigned ->
         {:noreply,
-         socket
-         |> put_flash(:info, "Drug stock recorded.")
-         |> assign_form(DrugAvailability.change_drug_stock(%DrugStock{}))}
+         put_flash(socket, :error, "You need to be assigned to a facility before recording stock.")}
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign_form(socket, changeset)}
+      scope ->
+        scoped_params = params |> with_reporter(socket) |> apply_scope(scope)
+
+        case DrugAvailability.record_stock(scoped_params) do
+          {:ok, _stock} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Drug stock recorded.")
+             |> assign_form(DrugAvailability.change_drug_stock(%DrugStock{}))}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, assign_form(socket, changeset)}
+        end
     end
   end
 

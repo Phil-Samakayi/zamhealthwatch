@@ -115,6 +115,80 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
     end
   end
 
+  describe "facility scoping for health workers" do
+    test "an unassigned health_worker sees a get-assigned message instead of the form", %{
+      conn: conn
+    } do
+      user = user_fixture() |> set_role(:health_worker)
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/labs")
+
+      assert html =~ "haven&#39;t been assigned to a facility yet"
+      assert html =~ "Manage users"
+      refute html =~ "id=\"lab-test-form\""
+    end
+
+    test "an assigned health_worker only sees lab tests for cases at their own facility", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture(%{name: "Ndola Teaching Hospital"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      own_case = case_fixture(%{facility_id: facility.id, disease: :cholera})
+      other_case = case_fixture(%{facility_id: other_facility.id, disease: :measles})
+      lab_test_fixture(%{case_id: own_case.id})
+      lab_test_fixture(%{case_id: other_case.id})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/labs")
+
+      assert html =~ "Cholera"
+      refute html =~ "Measles"
+    end
+
+    test "the case dropdown only offers cases at the health_worker's own facility", %{
+      conn: conn
+    } do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture(%{name: "Ndola Teaching Hospital"})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      case_fixture(%{facility_id: facility.id, disease: :cholera})
+      case_fixture(%{facility_id: other_facility.id, disease: :measles})
+
+      {:ok, _lv, html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/labs")
+
+      assert html =~ "Cholera"
+      refute html =~ "Ndola Teaching Hospital"
+    end
+
+    test "a forged case_id for another facility's case is rejected server-side", %{conn: conn} do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      other_facility = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+      other_case = case_fixture(%{facility_id: other_facility.id})
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/labs")
+
+      result = render_submit(lv, "save", %{"lab_test" => %{"case_id" => other_case.id}})
+
+      assert result =~ "You can only request tests for cases at your own facility."
+      assert LabReporting.list_lab_tests() == []
+    end
+  end
+
   describe "recording a result" do
     setup %{conn: conn} do
       facility = facility_fixture(%{name: "Test Clinic"})
@@ -139,7 +213,7 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
     test "shows Positive/Negative/Inconclusive buttons for a pending test when the user has a role",
          %{conn: conn, case_record: case_record} do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:health_worker)
+      user = user_fixture() |> set_role(:health_worker, case_record.facility_id)
 
       {:ok, lv, _html} =
         conn
@@ -172,7 +246,7 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       case_record: case_record
     } do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:health_worker)
+      user = user_fixture() |> set_role(:health_worker, case_record.facility_id)
 
       {:ok, lv, _html} =
         conn
