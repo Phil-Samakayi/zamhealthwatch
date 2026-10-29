@@ -66,6 +66,16 @@ defmodule ZamHealthWatch.PublicAlerts do
   SUBSCRIBE from the same number racing the first is exactly the case
   a pre-check `Repo.get_by/2` wouldn't safely cover).
 
+  The duplicate-recovery lookup below reads the phone number back out
+  of the changeset (`Ecto.Changeset.get_field/2`), not the raw `phone`
+  argument - `AlertSubscriber.changeset/2` trims it, so a caller
+  passing e.g. `" +260971234567"` inserts (and conflicts on)
+  `"+260971234567"`; looking the row back up by the untrimmed argument
+  would raise `Ecto.NoResultsError` instead of returning it. This was a
+  real bug, not a hypothetical - it surfaced the moment the trim was
+  added to the changeset, caught by a test exercising this exact
+  "whitespace-padded duplicate" path.
+
   ## Examples
 
       iex> subscribe("+260971234567")
@@ -73,13 +83,15 @@ defmodule ZamHealthWatch.PublicAlerts do
 
   """
   def subscribe(phone) when is_binary(phone) do
-    case %AlertSubscriber{} |> AlertSubscriber.changeset(%{phone: phone}) |> Repo.insert() do
+    changeset = %AlertSubscriber{} |> AlertSubscriber.changeset(%{phone: phone})
+
+    case Repo.insert(changeset) do
       {:ok, subscriber} ->
         {:ok, subscriber}
 
       {:error, changeset} ->
         if Keyword.has_key?(changeset.errors, :phone) do
-          {:ok, Repo.get_by!(AlertSubscriber, phone: phone)}
+          {:ok, Repo.get_by!(AlertSubscriber, phone: Ecto.Changeset.get_field(changeset, :phone))}
         else
           {:error, changeset}
         end

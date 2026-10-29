@@ -24,6 +24,20 @@ defmodule ZamHealthWatch.PublicAlertsTest do
       assert first.id == second.id
       assert PublicAlerts.list_subscriber_phones() == ["+260971234567"]
     end
+
+    test "trims surrounding whitespace from the phone number" do
+      assert {:ok, subscriber} = PublicAlerts.subscribe(" +260971234567 ")
+      assert subscriber.phone == "+260971234567"
+      assert PublicAlerts.list_subscriber_phones() == ["+260971234567"]
+    end
+
+    test "a whitespace-padded duplicate collapses into the existing subscription" do
+      assert {:ok, first} = PublicAlerts.subscribe("+260971234567")
+      assert {:ok, second} = PublicAlerts.subscribe(" +260971234567")
+
+      assert first.id == second.id
+      assert PublicAlerts.list_subscriber_phones() == ["+260971234567"]
+    end
   end
 
   describe "unsubscribe/1" do
