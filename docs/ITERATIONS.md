@@ -440,7 +440,7 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 - [x] `RiskLive.Index` - new "Hospital capacity" column with a status badge; subscribes to `"capacity_reports"` alongside `"cases"`; `handle_info` clauses changed to match on `%Case{}`/`%CapacityReport{}` explicitly.
 - [x] Tests: `PredictiveAnalyticsTest` (`:no_data` for a facility with no capacity report; a report's status surfacing correctly via `CapacityReport.capacity_status/1`; only the latest of multiple reports for a facility counts); `RiskLive.IndexTest` (badge rendering for both no-data and a real status, live update on a new capacity report reported elsewhere).
 
-**Status:** pending `mix test` verification.
+**Status:** never explicitly closed at the time, but verified by every full-suite run since - its tests have passed in each one through Iteration 13's 482 tests, 0 failures. Closed.
 
 ---
 
@@ -623,6 +623,8 @@ Also fixed an unrelated ElixirLS warning caught along the way: the new `handle_e
 - [x] `NationalReportingLive.Index` - `/reports/national`, inside the existing `:require_moh_admin` live_session alongside `/admin/users`; renders both tables and links to the CSV download; subscribes to all five contributing contexts' PubSub topics and recomputes the whole snapshot on any of their events, same "recompute everything" call `EpidemiologyLive.Index`/`MapLive.Index`/`RiskLive.Index` already make.
 - [x] Tests: `NationalReportingTest` (facility summary folding, vaccination pairing, CSV structure and comma-quoting), `NationalReportingControllerTest` (auth/role gating, CSV response headers and body), `NationalReportingLive.IndexTest` (auth/role gating, empty states, rendered rollup, live recompute on a new case).
 
-**Status:** pending `mix test` verification.
+**Status:** 482 tests, 0 failures. Closed. With this, all twelve of the brief's modules have a working first slice.
+
+One issue surfaced and was fixed during verification: the `export_csv/1` row test expected a facility with one just-reported case to read as `Insufficient data`, but that tier only applies to a facility with zero cases across all four weekly buckets. One case this week gives counts of `[0, 0, 0, 1]` - a least-squares slope of 0.3, below the 0.5 "elevated" threshold - so the correct tier is `Stable`. The test's expectation was wrong, not the code; fixed by asserting the real row (`...,No data,Stable,0.3`).
 
 ---
