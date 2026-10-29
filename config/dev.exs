@@ -3,7 +3,7 @@ import Config
 # Configure your database
 config :zamhealthwatch, ZamHealthWatch.Repo,
   username: "postgres",
-  password: "Lacas24.",
+  password: "postgres",
   hostname: "localhost",
   database: "zamhealthwatch_dev",
   stacktrace: true,
