@@ -475,3 +475,49 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 **Status:** `mix test`-verified (393 tests, 0 failures) - clean first run, no fixes needed. Iteration 10 is closed. Next: the USSD guided menu flow deferred above, or Health Worker Portal / National Reporting (the two brief modules still unbuilt from scratch).
 
 ---
+
+## Iteration 10 — Live verification + a phone-normalization fix
+
+**Goal:** `mix test` passing (Iteration 10's own close-out) only proves the code's logic is internally consistent - it doesn't prove `/webhooks/sms` actually works end to end against a real running server and a real Postgres connection, since `SmsGateway.Logger` is the only implementation ever exercised in `:test`. This slice is that live verification, plus the one real finding it surfaced.
+
+**Decisions:**
+
+- Manually exercised the full SUBSCRIBE → report-with-alert → STOP → report-with-fewer-subscribers → rejected-report path via `curl.exe` against a locally running `mix phx.server`, reading the actual Bandit/Ecto/Oban console log output rather than trusting the test suite alone. Every step matched what the code predicts, with one exception below.
+- That exception: a stray `alert_subscribers` row with a leading-space phone number (`" 260971111111"` instead of `"+260971111111"`) caused `AlertWorker` to report "notifying 2 subscriber(s)" instead of 1, and to deliver to a malformed number nothing could ever `STOP`. Root cause: `application/x-www-form-urlencoded` decodes a literal `+` as a space, so an earlier manual test that POSTed an un-percent-encoded `+` created this row - `unique_constraint(:phone)` had no way to catch it, since `" 260..."` and `"+260..."` are different strings, and `unsubscribe/1`'s exact-match delete could never reach it either.
+- Fixed by trimming `phone` in `AlertSubscriber.changeset/2` (`update_change(:phone, &String.trim/1)`, before `validate_required/2` so an all-whitespace value still correctly fails rather than silently becoming `""`). Deliberately a defensive minimum, not full phone-number normalization - no E.164 validation/formatting was added, since a real Africa's Talking webhook sends a clean MSISDN and this fix targets the one specific failure mode actually observed, not every theoretical malformed-input shape.
+- The stray row itself was cleaned up directly in the dev database (`DELETE FROM alert_subscribers WHERE phone !~ '^\+'`), not through application code - it was bad data from manual testing, not something any user-facing flow needs to recover from automatically.
+- The `mix test` re-run this trim fix's own new test immediately caught a second, real bug: `PublicAlerts.subscribe/1`'s duplicate-recovery path (what runs when `Repo.insert/1` hits the `unique_constraint(:phone)` conflict) re-queried using the raw, untrimmed `phone` function argument rather than the trimmed value the changeset actually inserted/conflicted on - `Repo.get_by!(AlertSubscriber, phone: phone)` against `" +260971234567"` found nothing, since only `"+260971234567"` exists, and raised `Ecto.NoResultsError` instead of returning the existing row. Fixed by reading the phone back out of the changeset (`Ecto.Changeset.get_field(changeset, :phone)`) instead of the function argument. A clean example of why the new test was worth writing even though it looked like it was only testing the schema-level trim - it exercised `subscribe/1`'s full conflict-recovery path too, not just `AlertSubscriber.changeset/2` in isolation. Separately, `config/test.exs` had drifted from `config/dev.exs`'s DB password (`"Lacas24."` vs. the real local Postgres password, `"postgres"`) - not a code bug, but it blocked this verification until caught and fixed too.
+
+**Built:**
+
+- [x] `AlertSubscriber.changeset/2` - trims `phone` before validation.
+- [x] `PublicAlerts.subscribe/1` - duplicate-recovery lookup now uses the trimmed phone from the changeset, not the raw argument.
+- [x] Tests: `PublicAlertsTest` - `subscribe/1` trims surrounding whitespace; a whitespace-padded duplicate collapses into the existing subscription instead of creating a second row (this second assertion is what caught the `subscribe/1` bug above).
+- [x] `config/test.exs`'s DB password corrected to match `config/dev.exs` and the real local Postgres instance.
+
+**Status:** Live-verified against a real `mix phx.server` + Postgres run first; that surfaced the phone-trim fix. The `subscribe/1` duplicate-recovery bug was then caught by this slice's own new test on the next `mix test` run (395 tests, 1 failure). Re-run confirmed green after the fix. Closed.
+
+---
+
+## Iteration 11 — USSD guided menu flow
+
+**Goal:** close the second, previously-deferred SMS/USSD gap (Iteration 10's own entry named it explicitly): a stateful, multi-step USSD session (`*384#`-style) distinct from the one-shot SMS `REPORT <DISEASE> <FACILITY_CODE>` grammar and `SUBSCRIBE`/`STOP` keywords - structurally different because a USSD gateway holds a session open across several request/response round-trips with the same phone number, not one inbound message handled and forgotten.
+
+**Decisions:**
+
+- No session state is persisted anywhere - no `GenServer`, ETS table, or database-backed session row. Africa's Talking's USSD protocol sends the *entire* accumulated input history in `text` on every request within a session (e.g. `"1*2*UTH"` on the third round-trip of a report), not just the latest keypress - so the whole menu state is reconstructible by parsing `text` fresh on every request. `UssdReporting.handle_session/2` is a pure function of `(phone, text)`, nothing else - no "where is this phone number in its session" mutable state to track anywhere, and no real use case yet for anything a session row would add (e.g. resuming an abandoned session). Same "no lifecycle without a real use case" call every other single-purpose piece of this project already makes.
+- Reuses `SmsReporting.report_from_sms/2` + `confirmation_message/1` and `PublicAlerts.subscribe/1`/`unsubscribe/1` rather than duplicating either context's logic - `UssdReporting`'s only real job is translating numeric menu choices into the same inputs those contexts already validate (a disease token, a facility code, a bare subscribe/unsubscribe). Information Expert again: neither `SmsReporting` nor `PublicAlerts` needs to know a USSD menu exists.
+- New `UssdWebhookController`/`POST /webhooks/ussd`, separate from `SmsWebhookController` - different inbound payload shape (`sessionId`/`serviceCode`/`phoneNumber`/`text` vs. `from`/`text`) and a genuinely different response contract: USSD requires a `text/plain` body prefixed `CON ` (keep the session open) or `END ` (final message), not a bare `200`. `UssdReporting.handle_session/2` returns plain `{:continue, text}` / `{:end, text}` tuples and stays ignorant of that wire format entirely - same controller/context split `SmsWebhookController` already keeps from `PublicAlerts`/`SmsReporting`.
+- Menu: option 1 (report) prompts for a disease (fixed 1-5 menu matching `SmsReporting`'s five recognized diseases) then a typed facility code, reusing the same `REPORT <DISEASE> <CODE>` command string `SmsReporting.report_from_sms/2` already parses rather than inventing a second disease/facility validation path; option 2 subscribes the sender; option 3 unsubscribes. Any unrecognized input at any step - an out-of-range menu digit, extra trailing input after a complete path, anything else - ends the session with a generic "Invalid selection" message rather than silently continuing or crashing.
+- No migration - this context holds no new state of its own; everything it touches already exists (`cases`, `alert_subscribers`, `users`).
+
+**Built:**
+
+- [x] `UssdReporting` context - `handle_session/2`, stateless menu routing over `SmsReporting`/`PublicAlerts`.
+- [x] `UssdWebhookController` - `POST /webhooks/ussd`, `CON `/`END `-prefixed `text/plain` responses.
+- [x] Router: `/webhooks/ussd` added alongside the existing `/webhooks/sms`.
+- [x] Tests: `UssdReportingTest` (main menu, disease menu, facility prompt, a real case created end-to-end, unknown facility code reusing `SmsReporting`'s own rejection reply, trailing extra input rejected, subscribe/unsubscribe including idempotency and the never-subscribed no-op); `UssdWebhookControllerTest` (empty-text session start, a full report path creating a real case, subscribe via option 2, a malformed payload still responding 200 with an `END` message).
+
+**Status:** pending `mix test` verification.
+
+---
