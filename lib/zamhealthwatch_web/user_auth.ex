@@ -317,4 +317,33 @@ defmodule ZamHealthWatchWeb.UserAuth do
   end
 
   defp maybe_store_return_to(conn), do: conn
+
+  @doc """
+  Plug for routes that require the logged-in user to be a `:moh_admin` -
+  the controller-pipeline equivalent of `on_mount(:require_moh_admin, ...)`
+  above, needed now that National Reporting's CSV export is a plain
+  controller action rather than a LiveView
+  (see `NationalReportingController`'s own moduledoc for why a download
+  needs one). Composes on top of `require_authenticated_user/2` rather
+  than duplicating its redirect/flash logic, the same relationship
+  `on_mount(:require_moh_admin, ...)` already has with
+  `on_mount(:require_authenticated, ...)`.
+  """
+  def require_moh_admin(conn, opts) do
+    conn = require_authenticated_user(conn, opts)
+
+    cond do
+      conn.halted ->
+        conn
+
+      conn.assigns.current_scope.user.role == :moh_admin ->
+        conn
+
+      true ->
+        conn
+        |> put_flash(:error, "You don't have permission to access this page.")
+        |> redirect(to: ~p"/")
+        |> halt()
+    end
+  end
 end
