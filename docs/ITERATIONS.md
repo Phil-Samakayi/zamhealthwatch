@@ -628,3 +628,31 @@ Also fixed an unrelated ElixirLS warning caught along the way: the new `handle_e
 One issue surfaced and was fixed during verification: the `export_csv/1` row test expected a facility with one just-reported case to read as `Insufficient data`, but that tier only applies to a facility with zero cases across all four weekly buckets. One case this week gives counts of `[0, 0, 0, 1]` - a least-squares slope of 0.3, below the 0.5 "elevated" threshold - so the correct tier is `Stable`. The test's expectation was wrong, not the code; fixed by asserting the real row (`...,No data,Stable,0.3`).
 
 ---
+
+## Iteration 14 — Deployment (Transition)
+
+**Goal:** the brief's Transition phase - "a hosted, working instance a recruiter or collaborator can actually click through." Getting there meant more than writing a Dockerfile. Before this iteration, nobody could log in to a deployed copy, there was no navigation between screens, the home page and header were still the Phoenix generator's, and an empty database would have demoed nothing.
+
+**Decisions (hosting and login confirmed with the project owner before writing code):**
+
+- **Render (free web service, Docker) + Neon (free Postgres).** Researched current pricing first. Fly.io no longer has a free tier, and its managed Postgres starts at about $38/month. Render's own free Postgres is deleted 30 days after creation. Gigalixir's free database is capped at 10,000 rows and 2 connections, which is tight once Oban is using it. Neon's free plan doesn't expire and needs no card. The trade-off accepted: Render's free instance sleeps after 15 idle minutes and takes about a minute to wake. Both are in Frankfurt, the closest region to Zambia either offers. PostGIS turned out not to be needed in production: facility coordinates are plain float columns, so any vanilla Postgres works.
+- **Demo accounts instead of email.** Login is magic-link by default, and the deployed app has no mail provider. Rather than adding one (which needs an API key and usually a verified domain), `ZamHealthWatch.Demo` seeds one password-login account per role (health worker at Kabwata Clinic, district officer, MOH admin), and the home page publishes the credentials. They're meant to be shared, so they're in source control in plain text. Every visitor uses the same logins, so one of them can change a demo password or, as MOH admin, a role. `ensure_accounts!/0` resets all three on every boot to undo that, and the free plan's idle restarts make those boots frequent.
+- **Logger mailer in production.** `config.exs` sets `Swoosh.Adapters.Local`, but `prod.exs` turns off its in-memory storage, so the first magic-link request on a deployed copy would have crashed. Production now uses `Swoosh.Adapters.Logger`, which writes emails to the server log. The login page tells visitors to use the password form instead, and the service owner can still sign in with their own address by copying the link out of Render's logs.
+- **Demo activity, seeded once.** `Demo.seed_activity!/1` runs only on a database with zero cases, so it never mixes into real data or duplicates itself. It goes through each context's public API, so broadcasts and lab-result side effects behave exactly as in normal use. Cases are backdated so `/risk` has a real shape: Kabwata Clinic's cholera rises 1 → 2 → 3 → 5 a week (Elevated), UTH is a steady 2 a week (Stable), and Monze's only case falls outside the window (No data). Known limitation: the trend is relative to when the database was seeded, so after four weeks these cases age out of the risk window. Re-basing demo timestamps on boot is a possible follow-up.
+- **Migrate and seed on every boot**, via `ZamHealthWatch.Release.setup/0` in the container's start command. Render's free plan has no pre-deploy command and no shell, and both steps are idempotent. Seeding starts the whole application rather than only the Repo, because the contexts broadcast over PubSub; the HTTP port stays closed until the final `start`.
+- **Neon TLS configured explicitly** in `runtime.exs` behind `DATABASE_SSL`, with full certificate and hostname verification plus SNI, which Neon uses to route connections. Neon's libpq-style `?sslmode=require` query string is stripped, since Ecto would otherwise treat those parameters as unknown Repo options. The `DATABASE_URL` must be Neon's direct endpoint, not the pooled one: Oban uses `LISTEN/NOTIFY`, which PgBouncer's transaction pooling breaks.
+- **`/health`** for Render's health checks. It's routed outside the browser pipeline, excluded from `force_ssl` (checks arrive over plain HTTP), and deliberately doesn't touch the database, since a check every few seconds would keep Neon's compute from ever suspending.
+- **A real header and home page.** The navigation lists every screen once a user is logged in, adding National Reporting and user management for MOH admins only. The home page explains what the project is, says plainly that it's a prototype on demo data, and lists the demo logins.
+
+**Built:**
+
+- [x] `Dockerfile` (two-stage release build on `elixir:1.19.6-otp-28-slim`), `.dockerignore`, `render.yaml` Blueprint.
+- [x] `ZamHealthWatch.Release` - `setup/0`, `migrate/0`, `rollback/2`, `seed/0`.
+- [x] `ZamHealthWatch.Demo` - `accounts/0`, `password/0`, `ensure_accounts!/0`, `seed_activity!/1`; called from `priv/repo/seeds.exs`.
+- [x] `config/runtime.exs` - Neon TLS/SNI, query-string stripping, `RENDER_EXTERNAL_HOSTNAME` fallback for the endpoint host, Logger mailer. `config/prod.exs` - `/health` excluded from `force_ssl`.
+- [x] `HealthController` + `GET /health`; demo-aware login notice; new `Layouts.app` header and navigation; new home page; README deployment section.
+- [x] Tests: `DemoTest` (accounts created, confirmed, and password-loginable; role/password reset; idempotence; missing-facility error; activity counts; the shaped risk trend; skip when cases exist), `HealthControllerTest`, rewritten `PageControllerTest` (demo credentials, logged-in greeting, navigation visibility by role).
+
+**Status:** pending `mix test` verification, then the first deploy.
+
+---
