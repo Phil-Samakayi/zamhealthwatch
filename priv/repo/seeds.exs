@@ -114,3 +114,22 @@ case Repo.get_by(Accounts.User, email: "philsamakayi@gmail.com") do
         "priv/repo/seeds.exs to bootstrap it as moh_admin."
     )
 end
+
+# Demo accounts and demo activity for the public deployment (Iteration
+# 14) - see ZamHealthWatch.Demo's moduledoc for the full reasoning. Runs
+# after the facilities above because the demo health worker belongs to
+# Kabwata Clinic. Both calls are safe on every boot: the accounts are
+# reset to their published password/role each time, and demo activity
+# is only added to a database that has no cases at all - so on a dev
+# database that already has your own test cases, it does nothing.
+ZamHealthWatch.Demo.ensure_accounts!()
+
+IO.puts(
+  "Ensured #{length(ZamHealthWatch.Demo.accounts())} demo accounts " <>
+    "(password reset to the published demo password)."
+)
+
+case ZamHealthWatch.Demo.seed_activity!() do
+  :seeded -> IO.puts("Seeded demo activity: cases, lab tests, stock, capacity, coverage.")
+  :skipped -> IO.puts("Cases already exist - demo activity left untouched.")
+end
