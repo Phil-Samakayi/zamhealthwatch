@@ -70,6 +70,34 @@ defmodule ZamHealthWatch.LabReporting do
   end
 
   @doc """
+  Returns the list of lab tests requested against cases at a given
+  facility, most recently requested first.
+
+  `LabTest` has no `facility_id` of its own - only `case_id`, linking
+  to `CaseManagement.Case` (which does carry `facility_id`) - so
+  scoping by facility means first asking `CaseManagement` which cases
+  are at that facility, then filtering lab tests down to that set of
+  ids. A plain SQL join would do it in one query, but would mean this
+  context reaching directly into `CaseManagement.Case`'s schema - the
+  same cross-context decoupling every other context in this project
+  keeps (`foreign_key_constraint/2` only, no cross-context
+  associations). Built for `LabLive.Index`'s Health Worker Portal
+  facility-scoping (see docs/ITERATIONS.md) - a facility with no cases
+  simply has no lab tests either, no separate check needed.
+
+  ## Examples
+
+      iex> list_lab_tests_by_facility(facility_id)
+      [%LabTest{}, ...]
+
+  """
+  def list_lab_tests_by_facility(facility_id) do
+    case_ids = facility_id |> CaseManagement.list_cases_by_facility() |> Enum.map(& &1.id)
+
+    Repo.all(from t in LabTest, where: t.case_id in ^case_ids, order_by: [desc: t.inserted_at])
+  end
+
+  @doc """
   Gets a single lab test.
 
   Raises `Ecto.NoResultsError` if the LabTest does not exist.

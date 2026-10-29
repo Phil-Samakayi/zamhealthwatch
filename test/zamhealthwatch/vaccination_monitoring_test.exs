@@ -22,6 +22,23 @@ defmodule ZamHealthWatch.VaccinationMonitoringTest do
     end
   end
 
+  describe "list_vaccination_records_by_district/1" do
+    test "returns only records for that district" do
+      district = district_fixture()
+      other_district = district_fixture()
+
+      record = vaccination_record_fixture(%{district_id: district.id})
+      _other_record = vaccination_record_fixture(%{district_id: other_district.id})
+
+      assert VaccinationMonitoring.list_vaccination_records_by_district(district.id) == [record]
+    end
+
+    test "returns an empty list for a district with no records" do
+      district = district_fixture()
+      assert VaccinationMonitoring.list_vaccination_records_by_district(district.id) == []
+    end
+  end
+
   describe "get_vaccination_record!/1" do
     test "raises if id is invalid" do
       assert_raise Ecto.NoResultsError, fn ->

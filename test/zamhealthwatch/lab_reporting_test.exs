@@ -23,6 +23,35 @@ defmodule ZamHealthWatch.LabReportingTest do
     end
   end
 
+  describe "list_lab_tests_by_facility/1" do
+    import ZamHealthWatch.GeographyFixtures
+
+    test "returns only lab tests for cases at that facility" do
+      facility = facility_fixture()
+      other_facility = facility_fixture()
+
+      case_at_facility = case_fixture(%{facility_id: facility.id})
+      case_elsewhere = case_fixture(%{facility_id: other_facility.id})
+
+      lab_test = lab_test_fixture(%{case_id: case_at_facility.id})
+      _other_lab_test = lab_test_fixture(%{case_id: case_elsewhere.id})
+
+      assert LabReporting.list_lab_tests_by_facility(facility.id) == [lab_test]
+    end
+
+    test "returns an empty list for a facility with no cases at all" do
+      facility = facility_fixture()
+      assert LabReporting.list_lab_tests_by_facility(facility.id) == []
+    end
+
+    test "returns an empty list for a facility whose cases have no lab tests yet" do
+      facility = facility_fixture()
+      case_fixture(%{facility_id: facility.id})
+
+      assert LabReporting.list_lab_tests_by_facility(facility.id) == []
+    end
+  end
+
   describe "get_lab_test!/1" do
     test "raises if id is invalid" do
       assert_raise Ecto.NoResultsError, fn ->

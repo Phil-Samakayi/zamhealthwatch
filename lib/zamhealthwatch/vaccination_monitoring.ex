@@ -73,6 +73,36 @@ defmodule ZamHealthWatch.VaccinationMonitoring do
   end
 
   @doc """
+  Returns the list of vaccination records for a given district, most
+  recently reported first.
+
+  Added for the Health Worker Portal's facility-scoped screens (see
+  docs/ITERATIONS.md) - a health worker only has a `facility_id`, not
+  a `district_id` directly, so the scoping done by the caller
+  (`VaccinationLive.Index`) is by the *district a worker's own
+  facility sits in* (`Geography.get_facility!(facility_id).district_id`),
+  not by facility itself. `VaccinationRecord` is genuinely
+  district-grain - no `facility_id` column exists on it at all (see
+  the moduledoc) - so this is the narrowest scoping this schema
+  actually supports; a worker ends up seeing every record for their
+  whole district, not only ones tied to their own facility
+  specifically. Logged as a known, deliberate broadening, not a bug.
+
+  ## Examples
+
+      iex> list_vaccination_records_by_district(district_id)
+      [%VaccinationRecord{}, ...]
+
+  """
+  def list_vaccination_records_by_district(district_id) do
+    Repo.all(
+      from v in VaccinationRecord,
+        where: v.district_id == ^district_id,
+        order_by: [desc: v.inserted_at]
+    )
+  end
+
+  @doc """
   Gets a single vaccination record.
 
   Raises `Ecto.NoResultsError` if it does not exist.

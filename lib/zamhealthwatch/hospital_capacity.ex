@@ -76,6 +76,31 @@ defmodule ZamHealthWatch.HospitalCapacity do
   end
 
   @doc """
+  Returns the list of capacity reports submitted at a given facility,
+  most recently reported first.
+
+  Same "facility-filtered, newest first" shape as
+  `CaseManagement.list_cases_by_facility/1`/
+  `DrugAvailability.list_drug_stocks_by_facility/1`, added for the
+  same reason: `HospitalLive.Index`'s Health Worker Portal
+  facility-scoping needs "every report at this facility", not just the
+  single latest one `latest_capacity_by_facility/0` already returns.
+
+  ## Examples
+
+      iex> list_capacity_reports_by_facility(facility_id)
+      [%CapacityReport{}, ...]
+
+  """
+  def list_capacity_reports_by_facility(facility_id) do
+    Repo.all(
+      from c in CapacityReport,
+        where: c.facility_id == ^facility_id,
+        order_by: [desc: c.inserted_at]
+    )
+  end
+
+  @doc """
   Returns the most recently reported `CapacityReport` for each facility
   that has at least one, as `%{facility_id => CapacityReport}`.
 

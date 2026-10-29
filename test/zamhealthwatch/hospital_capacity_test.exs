@@ -22,6 +22,23 @@ defmodule ZamHealthWatch.HospitalCapacityTest do
     end
   end
 
+  describe "list_capacity_reports_by_facility/1" do
+    test "returns only reports for that facility" do
+      facility = facility_fixture()
+      other_facility = facility_fixture()
+
+      report = capacity_report_fixture(%{facility_id: facility.id})
+      _other_report = capacity_report_fixture(%{facility_id: other_facility.id})
+
+      assert HospitalCapacity.list_capacity_reports_by_facility(facility.id) == [report]
+    end
+
+    test "returns an empty list for a facility with no reports" do
+      facility = facility_fixture()
+      assert HospitalCapacity.list_capacity_reports_by_facility(facility.id) == []
+    end
+  end
+
   describe "get_capacity_report!/1" do
     test "raises if id is invalid" do
       assert_raise Ecto.NoResultsError, fn ->
