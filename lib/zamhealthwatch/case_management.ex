@@ -53,7 +53,14 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Returns the list of cases reported at a given facility.
+  Returns the list of cases reported at a given facility, most recently
+  reported first.
+
+  Defined since Iteration 0 but had no real caller until the Health
+  Worker Portal landing page needed "this facility's recent cases" -
+  ordered now the same way `list_cases/0` already is (`Repo.all_by/2`
+  has no defined order on its own), rather than leaving an unordered
+  list for its first real consumer to work around.
 
   ## Examples
 
@@ -62,7 +69,7 @@ defmodule ZamHealthWatch.CaseManagement do
 
   """
   def list_cases_by_facility(facility_id) do
-    Repo.all_by(Case, facility_id: facility_id)
+    Repo.all(from c in Case, where: c.facility_id == ^facility_id, order_by: [desc: c.inserted_at])
   end
 
   @doc """

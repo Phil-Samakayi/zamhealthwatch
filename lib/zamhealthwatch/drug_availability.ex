@@ -75,6 +75,27 @@ defmodule ZamHealthWatch.DrugAvailability do
   end
 
   @doc """
+  Returns the list of drug stock records submitted at a given facility,
+  most recently reported first.
+
+  Same "facility-filtered, newest first" shape as
+  `CaseManagement.list_cases_by_facility/1`, added for the same reason:
+  the Health Worker Portal landing page needs "this facility's recent
+  stock submissions" rather than every facility's.
+
+  ## Examples
+
+      iex> list_drug_stocks_by_facility(facility_id)
+      [%DrugStock{}, ...]
+
+  """
+  def list_drug_stocks_by_facility(facility_id) do
+    Repo.all(
+      from d in DrugStock, where: d.facility_id == ^facility_id, order_by: [desc: d.inserted_at]
+    )
+  end
+
+  @doc """
   Gets a single drug stock record.
 
   Raises `Ecto.NoResultsError` if it does not exist.
