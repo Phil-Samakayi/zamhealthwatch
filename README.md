@@ -2,6 +2,8 @@
 
 A Public Health Intelligence Platform for Zambia — personal portfolio project, first Elixir/Phoenix build.
 
+**Live demo: [zamhealthwatch.onrender.com](https://zamhealthwatch.onrender.com).** The home page lists demo logins for each role. The free instance sleeps when idle, so the first visit can take about a minute to load.
+
 Started life as a Final Year Project proposal (see `docs/archive/`), then reframed as a broader modular platform once it stopped being an academic deliverable and became something meant to actually solve a problem. The full current spec lives in [`docs/ZamHealthWatch_Project_Brief.md`](docs/ZamHealthWatch_Project_Brief.md) — read that first.
 
 ![A case report from a health worker over SMS/USSD flows through Broadway into the Disease Surveillance context, which persists it to Postgres/PostGIS and broadcasts a PubSub event to two independent subscribers: Public Alerts, which enqueues an Oban job to text the community back, and the Epidemiology Dashboard LiveView, which pushes a live update straight to any connected browser — no REST polling layer in either direction.](docs/architecture.svg)

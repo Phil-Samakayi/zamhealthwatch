@@ -653,6 +653,8 @@ One issue surfaced and was fixed during verification: the `export_csv/1` row tes
 - [x] `HealthController` + `GET /health`; demo-aware login notice; new `Layouts.app` header and navigation; new home page; README deployment section.
 - [x] Tests: `DemoTest` (accounts created, confirmed, and password-loginable; role/password reset; idempotence; missing-facility error; activity counts; the shaped risk trend; skip when cases exist), `HealthControllerTest`, rewritten `PageControllerTest` (demo credentials, logged-in greeting, navigation visibility by role).
 
-**Status:** pending `mix test` verification, then the first deploy.
+**Status:** 493 tests, 0 failures. Deployed and live at https://zamhealthwatch.onrender.com. Closed. This completes the brief's Transition phase.
+
+Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "No data" about four weeks after seeding; district-level risk scoring, which would let vaccination coverage feed into it; and linking drug shortages to active outbreaks.
 
 ---
