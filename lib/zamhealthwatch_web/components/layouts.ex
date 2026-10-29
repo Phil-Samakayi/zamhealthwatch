@@ -35,35 +35,24 @@ defmodule ZamHealthWatchWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
+    <header class="navbar items-start gap-4 px-4 sm:px-6 lg:px-8 border-b border-base-300">
+      <div class="flex-1 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <a href={~p"/"} class="flex items-center gap-2 font-semibold">
+          <.icon name="hero-heart" class="size-5 text-primary" /> ZamHealthWatch
         </a>
+        <nav :if={@current_scope && @current_scope.user} id="main-nav" class="flex flex-wrap gap-1">
+          <.link :for={{label, path} <- nav_links(@current_scope.user)} href={path} class="btn btn-ghost btn-sm">
+            {label}
+          </.link>
+        </nav>
       </div>
       <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://phoenix.hexdocs.pm/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
+        <.theme_toggle />
       </div>
     </header>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+    <main class="px-4 py-10 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-5xl space-y-4">
         {render_slot(@inner_block)}
       </div>
     </main>
@@ -71,6 +60,36 @@ defmodule ZamHealthWatchWeb.Layouts do
     <.flash_group flash={@flash} />
     """
   end
+
+  # The app's own navigation (Iteration 14 - before deployment every
+  # screen was only reachable by typing its URL, and this header still
+  # carried the Phoenix generator's default links). Plain `href`s rather
+  # than `navigate`: the screens span three live_sessions plus the
+  # controller-rendered home page, and a cross-session `navigate` falls
+  # back to a full page load anyway. The two MOH-admin screens are only
+  # listed for MOH admins - the router's :require_moh_admin gate is what
+  # actually enforces that, hiding the links just avoids offering a
+  # dead end.
+  @nav_links [
+    {"Portal", "/portal"},
+    {"Cases", "/cases"},
+    {"Labs", "/labs"},
+    {"Vaccinations", "/vaccinations"},
+    {"Drugs", "/drugs"},
+    {"Hospitals", "/hospitals"},
+    {"Epidemiology", "/epidemiology"},
+    {"Map", "/map"},
+    {"Risk", "/risk"},
+    {"Guidance", "/guidance"}
+  ]
+
+  @admin_nav_links [
+    {"National report", "/reports/national"},
+    {"Users", "/admin/users"}
+  ]
+
+  defp nav_links(%{role: :moh_admin}), do: @nav_links ++ @admin_nav_links
+  defp nav_links(_user), do: @nav_links
 
   @doc """
   Shows the flash group with standard titles and content.

@@ -35,6 +35,17 @@ defmodule ZamHealthWatchWeb.UserLive.Login do
           </div>
         </div>
 
+        <div :if={logger_mail_adapter?()} id="demo-login-notice" class="alert alert-info">
+          <.icon name="hero-information-circle" class="size-6 shrink-0" />
+          <div>
+            <p>Email login links aren't sent on this demo deployment.</p>
+            <p>
+              Use the password form below with one of the
+              <.link href={~p"/"} class="underline">demo accounts on the home page</.link>.
+            </p>
+          </div>
+        </div>
+
         <.form
           :let={f}
           for={@form}
@@ -130,5 +141,12 @@ defmodule ZamHealthWatchWeb.UserLive.Login do
 
   defp local_mail_adapter? do
     Application.get_env(:zamhealthwatch, ZamHealthWatch.Mailer)[:adapter] == Swoosh.Adapters.Local
+  end
+
+  # The demo deployment's mailer (config/runtime.exs, Iteration 14) -
+  # emails only go to the server log, so a visitor who tries the magic
+  # link form needs telling where to go instead.
+  defp logger_mail_adapter? do
+    Application.get_env(:zamhealthwatch, ZamHealthWatch.Mailer)[:adapter] == Swoosh.Adapters.Logger
   end
 end
