@@ -518,6 +518,80 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 - [x] Router: `/webhooks/ussd` added alongside the existing `/webhooks/sms`.
 - [x] Tests: `UssdReportingTest` (main menu, disease menu, facility prompt, a real case created end-to-end, unknown facility code reusing `SmsReporting`'s own rejection reply, trailing extra input rejected, subscribe/unsubscribe including idempotency and the never-subscribed no-op); `UssdWebhookControllerTest` (empty-text session start, a full report path creating a real case, subscribe via option 2, a malformed payload still responding 200 with an `END` message).
 
-**Status:** pending `mix test` verification.
+**Status:** 411 tests, 0 failures. Closed.
+
+---
+
+## Iteration 12 — Health Worker Portal (slice 1 of 3)
+
+**Goal:** the first of three Health Worker Portal sub-slices. Re-reading the brief's own stated scope for this module ("login, case entry, treatment guidance, local case tracking") against what already existed by Iteration 11 found that login (Accounts/`phx.gen.auth`) and case entry (`CaseLive.Index`, Iteration 1) were already built - this module wasn't a ground-up build, it was closing the two genuinely missing pieces: treatment guidance content, and a facility-scoped "my work" landing page (slice 2). This first slice is the guidance content.
+
+**Decisions:**
+
+- `Guidance` is a static, non-database-backed context - a fixed Elixir map (`@guidance`), keyed by the same disease atoms `Case.disease_options/0` already defines, not a new schema/migration. Same "no lifecycle without a real use case" call this project has made repeatedly (`AlertSubscriber`, `DrugStock`, `CapacityReport`, `VaccinationRecord`) - nothing here needs editing, versioning, or per-user state yet.
+- Content is case-definition/immediate-action/when-to-refer/reporting guidance only - deliberately **no specific drug names or dosages**. A wrong or outdated hardcoded dose is an active safety risk this project has no mechanism to keep current; guidance instead points to "national treatment guidelines" for dosing specifics. Same "don't guess at something that could be actively wrong" judgment call already made elsewhere (e.g. Africa's Talking's exact USSD response shape in Iteration 11).
+- `GuidanceLive.Index.safe_to_disease/2` never calls `String.to_atom/1`/`String.to_existing_atom/1` on the raw `disease` URL param - it matches the param string against the already-atomized `diseases` list (`Enum.find(diseases, &(Atom.to_string(&1) == disease_param))`). An unrecognized param simply matches nothing rather than growing the atom table on untrusted input.
+- Routed at `/guidance` and `/guidance/:disease`, both inside the existing `:require_authenticated_user` live_session - guidance is useful to any authenticated role, not gated further.
+
+**Built:**
+
+- [x] `Guidance` context - `list_diseases/0`, `get/1`, static content for cholera/malaria/typhoid/covid19/measles.
+- [x] `GuidanceLive.Index` - disease picker, safe URL-param-to-atom matching.
+- [x] Router: `/guidance`, `/guidance/:disease`.
+- [x] Tests: `GuidanceTest`, `GuidanceLive.IndexTest`.
+
+**Status:** passing alongside the rest of the suite. Closed.
+
+---
+
+## Iteration 12 — Health Worker Portal (slice 2 of 3)
+
+**Goal:** the second sub-slice - a facility-scoped landing page (`PortalLive.Index`, `/portal`) giving a health worker "my work" at a glance: their facility's recent cases, recent drug stock, and current capacity status, plus shortcuts into the existing report screens. This is what actually needed new facility-filtered queries; `CaseManagement.list_cases_by_facility/1` existed since Iteration 0 but had no real caller until now.
+
+**Decisions:**
+
+- Scoped entirely by `current_scope.user.facility_id` - a health worker with no facility assigned yet sees an empty state pointing at `/admin/users` ("Manage users") rather than silently falling back to showing every facility's data. This empty-state pattern (a distinct message, not a default to "show everything") is what Slice 3 later reuses for the point-of-care screens themselves.
+- `CaseManagement.list_cases_by_facility/1` (pre-existing, newly given a real caller) and the newly added `DrugAvailability.list_drug_stocks_by_facility/1` both order by `inserted_at desc` and are capped to the 5 most recent via a private `recent/1` helper - a dashboard, not a full list, so "most recent N" is the page's own concern, not the context's.
+- `HospitalCapacity.latest_capacity_by_facility/0` (built in Iteration 9 for `PredictiveAnalytics`) is reused unmodified for the capacity-status badge - the "latest report per facility" shape it already returns is exactly what a landing page needs, no new query required.
+- `handle_info/2` only recomputes (`maybe_refresh/2`) when a broadcast event's own `facility_id` matches the viewer's - deliberately different from `EpidemiologyLive.Index`/`RiskLive.Index`, which recompute on *every* event because they aggregate cross-facility by design. A single-facility dashboard has no reason to react to another facility's activity.
+- `fetch_facility/1` rescues `Ecto.NoResultsError` the same way `AlertWorker.facility_name/1` already does - a user's `facility_id` isn't a real FK constraint on `users` (Iteration 0's decision), so a since-deleted facility shouldn't crash this page.
+
+**Built:**
+
+- [x] `CaseManagement.list_cases_by_facility/1` - now ordered (`desc: inserted_at`), previously unordered with no real caller.
+- [x] `DrugAvailability.list_drug_stocks_by_facility/1` - same facility-filtered/newest-first shape.
+- [x] `PortalLive.Index` - `/portal`, facility-scoped recent cases/stock/capacity, PubSub-filtered live updates.
+- [x] Router: `/portal`.
+- [x] Tests: `CaseManagementTest`/`DrugAvailabilityTest` ordering tests (with the established inserted_at-backdating fix for same-second insert flakiness); `PortalLive.IndexTest` (logged-out redirect, unassigned empty state, assigned empty state, cross-facility isolation, live PubSub scoping).
+
+**Status:** passing alongside the rest of the suite. Closed.
+
+---
+
+## Iteration 12 — Health Worker Portal (slice 3 of 3)
+
+**Goal:** the third sub-slice - facility-scope the five existing point-of-care screens (`CaseLive.Index`, `LabLive.Index`, `VaccinationLive.Index`, `DrugLive.Index`, `HospitalLive.Index`) themselves for the `health_worker` role, so a health worker's day-to-day reporting screens show and accept data for their own facility only, not every facility in the system. `Map`/`EpidemiologyLive.Index`/`RiskLive.Index` are deliberately left cross-facility for everyone - those are oversight/aggregate views, not a single worker's own work.
+
+**Decisions:**
+
+- Scoping applies to the `health_worker` role only - `district_officer`/`moh_admin` (and a `nil`-role user) remain unrestricted on these same five screens, matching the brief's own district/MOH-level oversight responsibilities. A `facility_scope/1` helper (`:unrestricted` / `:unassigned` / `{:locked, facility_id}`) is duplicated with a cross-referencing comment across all five LiveViews rather than extracted into a shared module - same small-per-module-helper convention `with_reporter/2` already established project-wide, now five times instead of four.
+- An unassigned `health_worker` (`facility_id: nil`) sees the same "get assigned" message `PortalLive.Index` already shows, with the report form itself hidden entirely - not a fallback to unscoped visibility. There is nothing meaningful to scope *to* yet, so showing an empty list with no explanation would be worse than being explicit about why.
+- The case-report form is genuinely **locked**, not just filtered: an assigned health worker's `facility_id` is forced server-side on every submission (`apply_scope/2`, same server-side-enforcement precedent `with_reporter/2` already set for `reported_by_id`) regardless of what the client sends, and the facility `<select>` is replaced in the UI with a disabled, pre-filled display of their own facility's name. Same treatment applied to `DrugLive.Index`'s and `HospitalLive.Index`'s own `facility_id` fields, for the same reason - a health worker choosing "report for a different facility" from a dropdown would otherwise have been possible even though the list view hid that facility's data from them.
+- **Schema-grain mismatch, resolved per screen:**
+  - `LabTest` has no `facility_id` of its own - only `case_id`, linking to `CaseManagement.Case` (which does carry `facility_id`). Rather than a SQL join (which would mean `LabReporting` reaching directly into `CaseManagement.Case`'s schema - the cross-context decoupling this project keeps everywhere else), `LabReporting.list_lab_tests_by_facility/1` asks `CaseManagement` which case ids belong to the facility first, then filters lab tests by that id set in a second query. There's no `facility_id` field on the lab-test-request form to lock the way the others are locked - instead, the `case_id` dropdown is pre-filtered to the worker's own facility in `mount/3`, **and** `handle_event("save", ...)` independently re-checks the submitted case's actual `facility_id` server-side (`check_scope/2`) before calling `LabReporting.request_test/1`, the same "don't trust the dropdown being filtered" precedent every role-gated button in this project already follows.
+  - `VaccinationRecord` is genuinely **district**-grain, not facility-grain - it has a `district_id` column and no `facility_id` at all (a deliberate earlier scoping decision, not an oversight). A health worker only has a `facility_id`, so `VaccinationLive.Index` narrows its scope one step further via `district_scope/1`: `{:locked, facility_id}` → `{:locked, facility.district_id}`. This means a health worker sees and reports into their *whole district's* coverage records, not only records somehow tied to their own facility specifically - there is no finer-grained link on this schema to narrow it further. Logged here as a known, deliberate broadening, not a bug. `Geography.Facility.district_id` is itself optional (no facility-management UI yet to guarantee it's set), so a worker whose own facility has no district on record gets a third, distinct `:no_district` state with its own explanatory message, rather than silently matching `:unassigned`'s wording or falling back to showing everything.
+- `HospitalCapacity.list_capacity_reports_by_facility/1` is new - `latest_capacity_by_facility/0` (Iteration 9) only ever returns the single latest report per facility, which is right for `PortalLive.Index`'s dashboard badge but wrong for `HospitalLive.Index`'s own table, which needs every report at the facility, same "facility-filtered, newest-first" shape `CaseManagement`/`DrugAvailability` already have.
+
+**Built:**
+
+- [x] `LabReporting.list_lab_tests_by_facility/1` - two-query, decoupled facility scoping via `CaseManagement`.
+- [x] `VaccinationMonitoring.list_vaccination_records_by_district/1` - district-grain scoping.
+- [x] `HospitalCapacity.list_capacity_reports_by_facility/1` - full per-facility report list, distinct from the existing latest-only lookup.
+- [x] `CaseLive.Index`/`DrugLive.Index`/`HospitalLive.Index` - facility_scope/1, locked facility_id forms, scoped list queries.
+- [x] `LabLive.Index` - facility-scoped case dropdown and lab-test list, server-side case-facility re-check on submit.
+- [x] `VaccinationLive.Index` - district_scope/1 (facility → district), locked district_id form, a distinct `:no_district` state.
+- [x] Tests: new facility-scoping `describe` blocks across all five `*LiveTest` modules (unassigned empty state, cross-facility list isolation, locked form field, forged-param rejection/override, unrestricted roles unaffected); new context tests for the three new query functions.
+
+**Status:** pending `mix test` verification - not yet run against this slice by the user.
 
 ---
