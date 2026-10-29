@@ -24,6 +24,7 @@ defmodule ZamHealthWatchWeb.Router do
     pipe_through :api
 
     post "/sms", SmsWebhookController, :create
+    post "/ussd", UssdWebhookController, :create
   end
 
   scope "/", ZamHealthWatchWeb do
