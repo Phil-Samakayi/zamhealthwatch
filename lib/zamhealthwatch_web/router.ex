@@ -27,6 +27,12 @@ defmodule ZamHealthWatchWeb.Router do
     post "/ussd", UssdWebhookController, :create
   end
 
+  # Render's health check (Iteration 14) - no pipeline at all; see
+  # HealthController's own doc for why.
+  scope "/", ZamHealthWatchWeb do
+    get "/health", HealthController, :show
+  end
+
   scope "/", ZamHealthWatchWeb do
     pipe_through :browser
 

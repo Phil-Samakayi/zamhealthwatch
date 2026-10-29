@@ -50,8 +50,36 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  # Neon (this project's hosted Postgres - see docs/ITERATIONS.md,
+  # Iteration 14) hands out connection strings ending in
+  # `?sslmode=require&channel_binding=require`. Those are libpq options;
+  # Ecto would turn them into unknown Repo options instead, so the query
+  # string is dropped here and TLS is configured explicitly below.
+  database_url = database_url |> URI.parse() |> Map.put(:query, nil) |> URI.to_string()
+
+  # TLS with full certificate and hostname verification, on when
+  # DATABASE_SSL is set. `server_name_indication` matters for Neon: it
+  # routes each connection to the right database by the SNI hostname,
+  # and Postgrex upgrades an already-open TCP socket to TLS, so it can't
+  # infer that name by itself.
+  database_ssl =
+    if System.get_env("DATABASE_SSL") in ~w(true 1) do
+      db_host = database_url |> URI.parse() |> Map.fetch!(:host) |> String.to_charlist()
+
+      [
+        verify: :verify_peer,
+        cacerts: :public_key.cacerts_get(),
+        server_name_indication: db_host,
+        customize_hostname_check: [
+          match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+        ]
+      ]
+    else
+      false
+    end
+
   config :zamhealthwatch, ZamHealthWatch.Repo,
-    # ssl: true,
+    ssl: database_ssl,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
@@ -70,7 +98,25 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  # Render sets RENDER_EXTERNAL_HOSTNAME (e.g. zamhealthwatch.onrender.com)
+  # on every web service, so PHX_HOST only needs setting by hand for a
+  # custom domain. The endpoint's host also drives LiveView's websocket
+  # origin check, so a wrong value here shows up as LiveViews refusing
+  # to connect.
+  host =
+    System.get_env("PHX_HOST") || System.get_env("RENDER_EXTERNAL_HOSTNAME") || "example.com"
+
+  # No email provider is connected for the demo deployment (Iteration
+  # 14 - visitors log in with the published demo accounts instead). The
+  # Local adapter config.exs sets can't run in prod: prod.exs turns off
+  # its in-memory storage, so the first magic-link request would crash.
+  # The Logger adapter writes each email to the server log instead -
+  # private to whoever owns the Render service, which also means the
+  # owner can still sign in with their own address by copying the link
+  # out of the logs.
+  config :zamhealthwatch, ZamHealthWatch.Mailer,
+    adapter: Swoosh.Adapters.Logger,
+    log_full_email: true
 
   config :zamhealthwatch, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

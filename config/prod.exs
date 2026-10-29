@@ -15,7 +15,11 @@ config :zamhealthwatch, ZamHealthWatchWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
     exclude: [
-      # paths: ["/health"],
+      # Render's health checks reach the container over plain HTTP,
+      # without the X-Forwarded-Proto header its public proxy adds - so
+      # without this exclusion every check would get a redirect to
+      # https:// instead of a 200.
+      paths: ["/health"],
       hosts: ["localhost", "127.0.0.1"]
     ]
   ]
