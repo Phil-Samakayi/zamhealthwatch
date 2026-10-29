@@ -26,6 +26,32 @@ defmodule ZamHealthWatch.CaseManagementTest do
       assert CaseManagement.list_cases_by_facility(facility.id) == [case]
     end
 
+    test "list_cases_by_facility/1 orders by most recently reported first" do
+      facility = facility_fixture()
+      older = case_fixture(%{facility_id: facility.id})
+
+      # Backdated, not just inserted first - see
+      # DrugAvailabilityTest.list_drug_stocks_by_facility/1's own
+      # ordering test for why (same-second insert flakiness).
+      #
+      # `older` is reassigned to `Repo.update!/1`'s own return value,
+      # not left pointing at the pre-update struct - the backdate only
+      # changes what's in the database; the local variable still holds
+      # the original (non-backdated) `inserted_at`/`updated_at` until
+      # this reassigns it, which is exactly what the subsequent `==`
+      # assertion below compares against.
+      older =
+        older
+        |> Ecto.Changeset.change(
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
+        )
+        |> ZamHealthWatch.Repo.update!()
+
+      newer = case_fixture(%{facility_id: facility.id})
+
+      assert CaseManagement.list_cases_by_facility(facility.id) == [newer, older]
+    end
+
     test "get_case!/1 returns the case with given id" do
       case = case_fixture()
       assert CaseManagement.get_case!(case.id) == case

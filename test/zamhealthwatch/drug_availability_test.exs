@@ -22,6 +22,44 @@ defmodule ZamHealthWatch.DrugAvailabilityTest do
     end
   end
 
+  describe "list_drug_stocks_by_facility/1" do
+    test "returns only records at that facility, most recently reported first" do
+      facility = facility_fixture()
+      other_facility = facility_fixture()
+
+      older = drug_stock_fixture(%{facility_id: facility.id, medicine: :ors})
+
+      # Backdated, not just inserted first - two records created back
+      # to back in the same test can land in the same second
+      # (`timestamps(type: :utc_datetime)` only has second precision),
+      # which would make `ORDER BY inserted_at DESC` ties arbitrary and
+      # this assertion flaky. Same backdating pattern
+      # PredictiveAnalyticsTest already uses for the same reason.
+      #
+      # `older` is reassigned to `Repo.update!/1`'s own return value -
+      # the backdate only changes the database row; the local variable
+      # still holds the pre-update `inserted_at`/`updated_at` until
+      # this reassigns it, which is what the `==` assertion below
+      # compares against.
+      older =
+        older
+        |> Ecto.Changeset.change(
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
+        )
+        |> ZamHealthWatch.Repo.update!()
+
+      newer = drug_stock_fixture(%{facility_id: facility.id, medicine: :al})
+      _other = drug_stock_fixture(%{facility_id: other_facility.id})
+
+      assert DrugAvailability.list_drug_stocks_by_facility(facility.id) == [newer, older]
+    end
+
+    test "returns an empty list for a facility with no records" do
+      facility = facility_fixture()
+      assert DrugAvailability.list_drug_stocks_by_facility(facility.id) == []
+    end
+  end
+
   describe "get_drug_stock!/1" do
     test "raises if id is invalid" do
       assert_raise Ecto.NoResultsError, fn ->
