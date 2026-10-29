@@ -40,7 +40,18 @@ Port 4000 is what Phoenix will use once there's an app to run; Postgres listens 
 
 ## Status
 
-**Iteration 0 in progress** — core domain model (District, Facility, User + role) and auth. See [`docs/ITERATIONS.md`](docs/ITERATIONS.md) for current detail. Phoenix scaffold is up and boots cleanly against Postgres/PostGIS; auth and the domain schemas are next.
+All twelve modules have a working first slice (Iterations 0–13), and Iteration 14 deploys the app as a public demo. See [`docs/ITERATIONS.md`](docs/ITERATIONS.md) for the detail and the deferred follow-ups.
+
+## Deployment
+
+The demo runs on **Render** (free web service, Docker) with **Neon** (free Postgres). PostGIS isn't needed in production: facility coordinates are plain latitude/longitude columns.
+
+- `Dockerfile` builds an Elixir release. On every boot the container runs `ZamHealthWatch.Release.setup/0`, which migrates and seeds, and then starts the server. Both steps are safe to repeat.
+- `render.yaml` is a Render Blueprint for the web service. The secrets (`DATABASE_URL`, `SECRET_KEY_BASE`) are entered in the Render dashboard, never committed.
+- Nobody can log in by email on the demo because no mail provider is connected. Instead, `ZamHealthWatch.Demo` seeds one password-login account per role, and the home page lists their credentials. Outgoing emails are written to the server log.
+- On the free plan the service sleeps after 15 minutes without traffic, so the first visit after that takes about a minute to wake it.
+
+Required environment variables: `DATABASE_URL` (Neon's direct connection string, not the `-pooler` one), `SECRET_KEY_BASE` (from `mix phx.gen.secret`), and `DATABASE_SSL=true`. Africa's Talking credentials (`AFRICAS_TALKING_USERNAME`, `AFRICAS_TALKING_API_KEY`) are optional; without them SMS is only logged.
 
 ## Docs
 

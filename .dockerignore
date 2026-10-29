@@ -1,0 +1,19 @@
+# Keeps local build output and editor state out of the Docker build
+# context - the image compiles everything itself (see Dockerfile).
+.git/
+.elixir_ls/
+_build/
+deps/
+cover/
+doc/
+tmp/
+test/
+docs/
+erl_crash.dump
+*.ez
+
+# Built inside the image by `mix assets.deploy`; a stale local copy
+# must not leak in.
+priv/static/assets/
+priv/static/cache_manifest.json
+assets/node_modules/

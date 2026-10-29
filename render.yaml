@@ -1,0 +1,29 @@
+# Render Blueprint for the ZamHealthWatch demo deployment (Iteration 14).
+# The database is on Neon, not Render - Render's free Postgres is deleted
+# 30 days after creation, Neon's free tier doesn't expire - so this only
+# defines the web service. See docs/ITERATIONS.md for the full setup.
+services:
+  - type: web
+    name: zamhealthwatch
+    runtime: docker
+    plan: free
+    # Closest Render region to Zambia. Create the Neon project in AWS
+    # Europe Central (Frankfurt) too, so app-to-database calls stay short.
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      # Neon's *direct* connection string, not the "-pooler" one: Oban
+      # relies on Postgres LISTEN/NOTIFY, which doesn't work through
+      # PgBouncer's transaction pooling.
+      - key: DATABASE_URL
+        sync: false
+      # Must be at least 64 bytes, so it can't use generateValue (which
+      # produces 44 characters). Generate locally with `mix phx.gen.secret`.
+      - key: SECRET_KEY_BASE
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: POOL_SIZE
+        value: "5"
