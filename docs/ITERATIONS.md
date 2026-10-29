@@ -592,6 +592,37 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 - [x] `VaccinationLive.Index` - district_scope/1 (facility → district), locked district_id form, a distinct `:no_district` state.
 - [x] Tests: new facility-scoping `describe` blocks across all five `*LiveTest` modules (unassigned empty state, cross-facility list isolation, locked form field, forged-param rejection/override, unrestricted roles unaffected); new context tests for the three new query functions.
 
-**Status:** pending `mix test` verification - not yet run against this slice by the user.
+**Status:** 456 tests, 0 failures. Closed.
+
+Two real issues surfaced and were fixed during verification, both worth logging:
+
+- Two ordering tests (`CaseManagementTest.list_cases_by_facility/1`, `DrugAvailabilityTest.list_drug_stocks_by_facility/1`) backdated an `older` fixture's `inserted_at` via `Repo.update!/1` but never reassigned the local `older` variable to the update's return value - the subsequent `==` assertion compared the DB's correctly-backdated row against a stale, pre-update struct still held in `older`. Fixed by reassigning (`older = older |> Ecto.Changeset.change(...) |> Repo.update!()`); the `list_cases_by_facility/1` instance of this bug predates this slice.
+- Three of this slice's own new isolation tests (`CaseLive`/`DrugLive`/`VaccinationLive`) initially asserted on the *absence* of a disease/medicine/antigen name to prove another facility's/district's record wasn't shown - but those fields are closed enums, and their `<select>` always lists every possible value as a choice for a *new* report regardless of what's in the scoped list below it, so the assertion never actually exercised the scoping. Fixed by asserting on the rendered "N reported so far" count (which does reflect the scoped query) and the other facility's/district's own name instead.
+- Four pre-existing tests (two in `CaseLive.IndexTest`, two in `LabLive.IndexTest`) used a bare `user_fixture() |> set_role(:health_worker)` with no facility purely as a stand-in for "a user with some role," to test the Confirm/Resolve and lab-result buttons - unrelated to facility scoping. Under this slice's new rule, a facility-less health worker is `:unassigned` and sees an empty list, so there was nothing to click. Fixed by assigning each of those test users to the same facility as the case/lab test under test.
+
+Also fixed an unrelated ElixirLS warning caught along the way: the new `handle_event("save", ...)` clause had been inserted between `LabLive.Index`'s two `handle_event/3` clauses rather than next to the other one - cosmetic (clause dispatch doesn't care about grouping), but moved `check_scope/2` below both clauses to keep the convention this project follows elsewhere.
+
+---
+
+## Iteration 13 — National Reporting
+
+**Goal:** the twelfth and last of the brief's modules - "aggregated, exportable reporting for MOH-level consumption - the rollup of everything else." Unlike every other module, this one started with no new domain data of its own to model - every other context's public API already existed by the time this iteration started, so the entire job was deciding how to shape what they already return into one MOH-facing snapshot, not what to persist.
+
+**Decisions (scope, confirmed with the project owner before writing code):**
+
+- **CSV only**, not PDF/Excel - the brief says "exportable," not which format, and a CSV is what a MOH analyst actually pastes straight into Excel/Stata/R. Written as a minimal hand-rolled RFC 4180 writer (quote-on-comma/quote/newline, `\r\n` line endings) rather than pulling in a dependency like NimbleCSV for what turned out to be a dozen lines of code.
+- **A current snapshot, not a selectable date range** - no module in this project exposes an as-of/historical query yet (`PredictiveAnalytics`'s weekly trend buckets aside, and those aren't a general date-range primitive), so a date-range selector would have been a UI control with nothing underneath it to actually filter by historically. Logged as the natural next slice once a module exists that needs one.
+- **Facility-level rollup, one row per facility, not one row per case/test/record** - "aggregated" is the brief's own word, and a row per individual entry is what the Epidemiology Dashboard and each module's own screen already give a closer look at. Vaccination coverage is genuinely district-grain (`VaccinationRecord` has no `facility_id` at all - see Iteration 8's own decision log), so it stays a second, separate table in the same CSV rather than being broadcast onto every facility row in that district, which would overstate a precision the data doesn't have.
+- **`moh_admin`-only**, both the on-screen preview and the CSV download - matches the brief's own "MOH-level consumption" framing and the existing `:require_moh_admin` gate `/admin/users` already uses. The CSV download is a plain controller action, not a LiveView route - a browser "Save As" download needs a real HTTP response with a `content-disposition` header, which a LiveView socket can't produce without an extra JS-hook workaround this project had no other reason to build. `UserAuth.require_moh_admin/2` is a new controller-pipeline plug added alongside the existing `on_mount(:require_moh_admin, ...)`, composed on `require_authenticated_user/2` the same way the on_mount version composes on `on_mount(:require_authenticated, ...)`.
+
+**Built:**
+
+- [x] `NationalReporting` context - `facility_summary/1` (one `FacilitySummary` struct per facility, folding in case counts by status, lab test counts by status, drug stock/shortage counts, and the existing `PredictiveAnalytics.list_risk_scores/1` read for risk tier + hospital capacity status), `vaccination_coverage/0` (records paired with district names), and `export_csv/1` (both tables as CSV iodata). Depends on every other context's existing public API only - no new cross-context coupling in the other direction.
+- [x] `NationalReporting.FacilitySummary` - a computed, non-persisted struct, same "no schema/changeset/migration for a read-only shape" convention `PredictiveAnalytics.RiskScore` already set.
+- [x] `NationalReportingController` - `GET /reports/national.csv`, gated by the new `UserAuth.require_moh_admin/2` plug.
+- [x] `NationalReportingLive.Index` - `/reports/national`, inside the existing `:require_moh_admin` live_session alongside `/admin/users`; renders both tables and links to the CSV download; subscribes to all five contributing contexts' PubSub topics and recomputes the whole snapshot on any of their events, same "recompute everything" call `EpidemiologyLive.Index`/`MapLive.Index`/`RiskLive.Index` already make.
+- [x] Tests: `NationalReportingTest` (facility summary folding, vaccination pairing, CSV structure and comma-quoting), `NationalReportingControllerTest` (auth/role gating, CSV response headers and body), `NationalReportingLive.IndexTest` (auth/role gating, empty states, rendered rollup, live recompute on a new case).
+
+**Status:** pending `mix test` verification.
 
 ---
