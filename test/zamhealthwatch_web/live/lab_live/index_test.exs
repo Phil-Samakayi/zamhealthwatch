@@ -264,7 +264,7 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       assert CaseManagement.get_case!(case_record.id).status == :confirmed
     end
 
-    test "clicking Negative records the result and resolves the linked case", %{
+    test "clicking Negative records the result and rules the linked case out", %{
       conn: conn,
       case_record: case_record
     } do
@@ -280,7 +280,7 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       |> element(row_selector(lab_test) <> " button", "Negative")
       |> render_click()
 
-      assert CaseManagement.get_case!(case_record.id).status == :resolved
+      assert CaseManagement.get_case!(case_record.id).status == :not_a_case
     end
 
     test "clicking Inconclusive records the result and leaves the case status unchanged", %{

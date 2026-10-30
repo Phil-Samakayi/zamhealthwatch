@@ -9,9 +9,8 @@ defmodule ZamHealthWatch.LabReporting do
   from `CaseManagement`, not folded into it the way Disease
   Surveillance's aggregates were in Iteration 1 - a lab test is a
   genuinely distinct entity with its own two-state lifecycle
-  (`:pending` -> `:resulted`, not `Case`'s three-state
-  `:suspected` -> `:confirmed` -> `:resolved`), not just another query
-  over the `cases` table. `CaseManagement` doesn't know this context
+  (`:pending` -> `:resulted`, separate from a case's own
+  classification), not just another query over the `cases` table. `CaseManagement` doesn't know this context
   exists; `LabReporting` depends on `CaseManagement`'s public API
   (`get_case!/1`, `update_case_status/2`) in one direction only, the
   same direction `PredictiveAnalytics` already depends on it and
@@ -155,7 +154,7 @@ defmodule ZamHealthWatch.LabReporting do
   Same two-check shape `CaseManagement.advance_case_status/2` already
   established for a role-gated action, applied here because recording a
   result can change a case's status exactly the way clicking
-  Confirm/Resolve on the case list already can - leaving that path
+  Confirm on the case list already can - leaving that path
   ungated while the button is gated would be a real, if narrow, hole:
 
     * `role` must be assigned (not `nil`) - the same "any of the three
@@ -171,18 +170,20 @@ defmodule ZamHealthWatch.LabReporting do
   already draws for what a case-count trend means):
 
     * `:positive` confirms the signal - the case moves to `:confirmed`.
-    * `:negative` downgrades it - the case moves to `:resolved` (ruled
-      out).
+    * `:negative` rules it out - the case moves to `:not_a_case`. Until
+      Iteration 15 this set `:resolved`, which also meant "recovered";
+      a negative result means the patient never had the disease, so it
+      now has its own classification (see `Case`'s `status` field).
     * `:inconclusive` changes nothing - "we don't know yet" isn't a
       real signal either way.
 
   Applied unconditionally via `CaseManagement.update_case_status/2`,
   regardless of the case's current status - the same "no stricter
   transition rule than the data layer already allows" call Iteration 1
-  made for `Case.status_changeset/2` itself. A result landing on an
-  already-`:resolved` case (e.g. one a health worker closed before the
-  lab confirmed it) will reopen or re-close it rather than being
-  silently ignored - there's no real second-order use case yet deciding
+  made for `Case.status_changeset/2` itself. A result landing on a
+  case already classified some other way (e.g. a positive on a case an
+  earlier test ruled out) reclassifies it rather than being silently
+  ignored - there's no real second-order use case yet deciding
   what *should* happen in that narrower situation, so a more careful
   rule isn't guessed at here. Logged as a known, deliberate limitation,
   not silently attempted.
@@ -228,7 +229,7 @@ defmodule ZamHealthWatch.LabReporting do
   defp apply_result_to_case(%LabTest{result: :negative, case_id: case_id}) do
     case_id
     |> CaseManagement.get_case!()
-    |> CaseManagement.update_case_status(%{status: :resolved})
+    |> CaseManagement.update_case_status(%{status: :not_a_case})
   end
 
   defp apply_result_to_case(%LabTest{result: :inconclusive}), do: :ok

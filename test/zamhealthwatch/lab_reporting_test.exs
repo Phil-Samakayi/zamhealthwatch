@@ -131,14 +131,14 @@ defmodule ZamHealthWatch.LabReportingTest do
       assert CaseManagement.get_case!(case_record.id).status == :confirmed
     end
 
-    test "a negative result resolves the linked case" do
+    test "a negative result rules the linked case out (not a case)" do
       case_record = case_fixture()
       lab_test = lab_test_fixture(%{case_id: case_record.id})
 
       assert {:ok, updated} = LabReporting.record_result(lab_test, :negative, :district_officer)
 
       assert updated.result == :negative
-      assert CaseManagement.get_case!(case_record.id).status == :resolved
+      assert CaseManagement.get_case!(case_record.id).status == :not_a_case
     end
 
     test "an inconclusive result leaves the linked case's status unchanged" do
@@ -151,9 +151,9 @@ defmodule ZamHealthWatch.LabReportingTest do
       assert CaseManagement.get_case!(case_record.id).status == :suspected
     end
 
-    test "a positive result reopens an already-resolved case (deliberate, logged limitation)" do
+    test "a positive result reclassifies a case an earlier result ruled out" do
       case_record = case_fixture()
-      {:ok, case_record} = CaseManagement.update_case_status(case_record, %{status: :resolved})
+      {:ok, case_record} = CaseManagement.update_case_status(case_record, %{status: :not_a_case})
       lab_test = lab_test_fixture(%{case_id: case_record.id})
 
       assert {:ok, _updated} = LabReporting.record_result(lab_test, :positive, :health_worker)

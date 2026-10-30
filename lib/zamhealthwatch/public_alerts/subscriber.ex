@@ -5,7 +5,7 @@ defmodule ZamHealthWatch.PublicAlerts.Subscriber do
   Subscribes to `CaseManagement`'s `"cases"` PubSub topic and, on every
   `{:created, case}` broadcast, enqueues an `AlertWorker` job. Doesn't
   react to `{:updated, case}` - alerting on every later status change
-  (e.g. a case moving from `:suspected` to `:resolved`) isn't part of
+  (e.g. a case moving from `:suspected` to `:confirmed`) isn't part of
   this slice; only the initial report triggers an alert for now.
 
   A small, permanent `GenServer` rather than a one-off `Task`, because it
