@@ -281,12 +281,14 @@ defmodule ZamHealthWatch.Demo do
   end
 
   # Lab tests on four of Kabwata's cholera cases - two positive (the
-  # case moves to :confirmed), one negative (:not_a_case), one still
-  # pending - via LabReporting.record_result/3 itself, so the case-status
-  # side effect is the real one. The oldest confirmed cholera patient
-  # died. At UTH, five malaria cases are confirmed clinically and two of
-  # those patients have recovered - so the case list and dashboards show
-  # every classification and both outcomes.
+  # case moves to :confirmed), one still pending, and one first issued
+  # as positive, then corrected to negative with a reason (the case
+  # ends up :not_a_case, and /labs shows the correction history). All
+  # through LabReporting itself, so the case-status effects are the
+  # real ones. The oldest confirmed cholera patient died. At UTH, five
+  # malaria cases are confirmed clinically and two of those patients
+  # have recovered - so the case list and dashboards show every
+  # classification and both outcomes.
   defp seed_case_outcomes!(cases, worker, lab_officer) do
     kabwata_cholera =
       Enum.filter(cases, &(&1.disease == :cholera and &1.reported_by_id == worker.id))
@@ -294,13 +296,28 @@ defmodule ZamHealthWatch.Demo do
     {lab_cases, _rest} = Enum.split(kabwata_cholera, 4)
 
     lab_cases
-    |> Enum.zip([:positive, :positive, :negative, :pending])
+    |> Enum.zip([:positive, :positive, :corrected_to_negative, :pending])
     |> Enum.each(fn {case_record, result} ->
       {:ok, lab_test} =
         LabReporting.request_test(%{case_id: case_record.id, requested_by_id: worker.id})
 
-      if result != :pending do
-        {:ok, _resulted} = LabReporting.record_result(lab_test, result, lab_officer)
+      case result do
+        :pending ->
+          :ok
+
+        :corrected_to_negative ->
+          {:ok, issued} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+          {:ok, _corrected} =
+            LabReporting.correct_result(
+              issued,
+              :negative,
+              "Repeat test on a fresh sample was negative; the first sample was contaminated.",
+              lab_officer
+            )
+
+        result ->
+          {:ok, _resulted} = LabReporting.record_result(lab_test, result, lab_officer)
       end
     end)
 
@@ -318,7 +335,7 @@ defmodule ZamHealthWatch.Demo do
 
     confirmed =
       Enum.map(uth_malaria, fn case_record ->
-        {:ok, updated} = CaseManagement.update_case_status(case_record, %{status: :confirmed})
+        {:ok, updated} = CaseManagement.advance_case_status(case_record, :district_officer)
         updated
       end)
 

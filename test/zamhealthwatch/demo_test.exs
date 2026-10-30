@@ -96,12 +96,16 @@ defmodule ZamHealthWatch.DemoTest do
       lab_tests = LabReporting.list_lab_tests()
       assert length(lab_tests) == 4
 
+      # One demo result was issued positive, then corrected to negative.
+      assert [correction] = LabReporting.list_corrections()
+      assert {correction.previous_result, correction.new_result} == {:positive, :negative}
+
       # Every demo result is entered by the demo lab officer, the only
       # role allowed to since Iteration 15.
       lab_officer = Accounts.get_user_by_email("lab.officer@example.com")
 
       assert lab_tests
-             |> Enum.filter(&(&1.status == :resulted))
+             |> Enum.filter(&(&1.status in [:resulted, :corrected]))
              |> Enum.all?(&(&1.resulted_by_id == lab_officer.id))
       assert length(DrugAvailability.list_drug_stocks()) == 8
       assert length(HospitalCapacity.list_capacity_reports()) == 4

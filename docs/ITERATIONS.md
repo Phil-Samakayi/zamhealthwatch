@@ -712,6 +712,36 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `Demo`: lab officer account, and demo results entered by it.
 - [x] Tests: `LabReportingTest` (lab officer records and is recorded; every other role refused; `can_record_results?/1`), `LabLive.IndexTest` (buttons only for lab officers, "Resulted by" shown, forged events from other roles refused), `DemoTest` (demo results attributed to the lab officer), `NationalReportingTest` updated.
 
+**Status:** 509 tests, 0 failures, first run. Closed.
+
+---
+
+## Iteration 15 — Lab result corrections (slice 3 of 4)
+
+**Re-planned:** this was meant to be the last slice, but corrections plus notifications turned out to be two separate pieces of work. This slice is the correction itself: the history, the recalculated classification, and the screen. The notifications (telling the requester, and the "ruled out" SMS) move to a slice 4, so each stays small enough to test properly.
+
+**Decisions:**
+
+- **Append-only correction history**, in a new `lab_result_corrections` table. Each correction or withdrawal records the previous result, the new one, a required reason, who made it, and when, in the same transaction as the change. Rows are never updated or deleted (no `updated_at`; every foreign key is `:restrict`), and a mistaken correction is fixed by another correction. The earliest entry's `previous_result` is the result as originally issued, which covers US lab regulation's requirement to keep both the original and the corrected report. The lab test's own `resulted_at`/`resulted_by_id` keep saying who issued the original and when.
+- **Two kinds of change, following FHIR:** *corrected* (the result was wrong; the test gets status `:corrected` and the new result) and *entered in error* (the result should never have been recorded against this test; the test gets status `:entered_in_error`, keeps the old result for display, struck through, and stops counting). A withdrawn result can't be corrected afterwards; if the test was really done, it's requested again. A correction to the same result is refused as `:unchanged`, so the history doesn't fill with no-ops.
+- **A reason is required, at least 10 characters after trimming.** Long enough that "typo" doesn't pass. An unexplained correction is exactly the kind of record an audit can't make sense of later.
+- **Who can correct:** lab officers (who issue results) and MOH admins (oversight, for when the lab itself can't). Not district officers or health workers. A correction changes a case's classification for everyone, so it needs the same authority as issuing the result. `can_correct_results?/1` is the single rule; the screen asks it, and `correct_result/4`/`withdraw_result/3` enforce it.
+- **Classification is now recalculated from all of a case's current results, not pushed by each new one.** This is the change that makes corrections work without an "undo". `LabReporting` works out a verdict from the case's resulted and corrected tests (pending and withdrawn ones don't count): any positive, else any negative, else none. `CaseManagement.classification_for/2` turns that, plus whether a person confirmed the case clinically, into a classification. Positive confirms. Negative rules out, even over a clinical confirmation, because a laboratory finding outranks a clinical impression. With nothing conclusive, a clinical confirmation stands. Otherwise the case is suspected. Since the answer depends only on those facts and never on the previous status, every correction lands correctly. One deliberate change from before: with conflicting results on different tests of the same case, a positive now wins regardless of order, where before the latest result did. A negative test can miss a real infection; a positive rarely invents one.
+- **Clinical confirmation became its own fact** (`cases.clinically_confirmed_at`, set by the Confirm button). Without it, withdrawing a positive result on a case a health worker had also confirmed would wrongly drop it back to "suspected". The migration backfills it for every case that's confirmed today with no positive lab result behind it, since that can only have been a manual confirmation.
+- **Correction timestamps use microseconds.** The order of the history is the audit trail, and two corrections in the same second would otherwise sort ambiguously.
+- **National Reporting** counts a corrected result as issued and a withdrawn one as not (`FacilitySummary.issued_lab_results/1`).
+- **Demo:** one Kabwata result is now issued positive, then corrected to negative with a reason, so `/labs` shows a real correction history. UTH's confirmations go through the Confirm path, so they're recorded as clinical.
+
+**Built:**
+
+- [x] Migration `add_lab_result_corrections` (corrections table; `cases.clinically_confirmed_at` with backfill).
+- [x] `LabReporting.LabResultCorrection` schema and changeset (reason trimmed, 10-1000 characters; new result required for corrections, empty for withdrawals).
+- [x] `LabTest`: statuses `:corrected` and `:entered_in_error`; `correction_changeset/2`, `withdrawal_changeset/1`.
+- [x] `LabReporting`: `can_correct_results?/1`, `correct_result/4`, `withdraw_result/3`, `list_corrections/0`, `list_corrections_for_lab_test/1`, and verdict-based recalculation after every result change.
+- [x] `CaseManagement`: `classification_for/2`, `apply_lab_verdict/2`; Confirm records `clinically_confirmed_at`.
+- [x] `LabLive.Index`: Correct/Withdraw actions, a correction panel (result picker and reason, with validation errors shown inline), Corrected/Withdrawn badges, struck-through withdrawn results, and a facility-scoped correction history.
+- [x] Tests: `LabReportingTest` (correct, correct twice in order, MOH admin, other roles refused, reason validation leaves everything unchanged, unchanged and not-correctable refusals, broadcast, a positive on another test still confirming, withdrawal, clinical confirmation surviving a withdrawal, nothing after withdrawal), `CaseManagementTest` (every `classification_for/2` rule, `apply_lab_verdict/2`, clinical confirmation recorded), `LabLive.IndexTest` (correct and withdraw through the panel, a too-short reason shown as an error, MOH admin access, district officer refused even with forged events), `NationalReportingTest`, `DemoTest`.
+
 **Status:** pending `mix test` verification.
 
 ---
