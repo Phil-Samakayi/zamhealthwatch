@@ -870,6 +870,6 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] Demo outcome correction.
 - [x] Tests: `CaseManagementTest` (correction and history, removal and re-recording, roles, no outcome, unchanged, reason required with nothing changed, invalid outcome, correcting a correction, counts and the corrected-case list follow), `CaseLive.IndexTest` (officer corrects and the history shows it, removal brings back the outcome buttons, short reason refused, health worker sees no button and a forged correction is refused, panel refused for another facility's case, live list scoped to the health worker's facility), `DemoTest` (demo correction, reset count), existing `record_outcome` callers updated.
 
-**Status:** pending `mix test` verification.
+**Status:** 604 tests, 0 failures, first run. Migration applied cleanly. Closed.
 
 ---
