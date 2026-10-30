@@ -791,6 +791,6 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] Home page notice (`#demo-reset-notice`) when the deployment resets on boot. README deployment section.
 - [x] Tests: `DemoTest` (every kind of activity cleared; accounts, districts, and facilities kept; per-table counts returned; waiting alert jobs removed; reset plus seed brings back a correction notice that had been marked as seen; flag off unless configured), `PageControllerTest` (notice shown only when the flag is on).
 
-**Status:** pending `mix test` verification. Then set `DEMO_RESET_ON_BOOT=true` on the Render service and confirm the correction notice appears for the demo health worker.
+**Status:** 568 tests, 0 failures, first run. Closed. Deployed: Render picked `DEMO_RESET_ON_BOOT` up from `render.yaml` through the Blueprint sync, so no dashboard change was needed. The first boot logged "cleared 46 rows of demo activity", the home page shows the reset notice, and the demo health worker saw the correction notice on the Portal for the first time. Still to confirm: that the free instance actually spins down when idle despite Render's `/health` checks every 5 seconds. If it doesn't, the reset only runs on deploys, and the fix is to also reset when the demo data is older than a set age.
 
 ---
