@@ -432,4 +432,70 @@ defmodule ZamHealthWatch.LabReportingTest do
                {:error, :already_resulted}
     end
   end
+
+  describe "correction notices" do
+    setup do
+      requester = user_fixture()
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+      lab_test = lab_test_fixture(%{requested_by_id: requester.id})
+      {:ok, issued} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, _corrected} =
+        LabReporting.correct_result(issued, :negative, "Repeat test negative.", lab_officer)
+
+      [correction] = LabReporting.list_corrections_for_lab_test(lab_test.id)
+      %{requester: requester, lab_officer: lab_officer, correction: correction}
+    end
+
+    test "the requester is shown the correction", %{requester: requester, correction: correction} do
+      assert [notice] = LabReporting.list_correction_notices(requester.id)
+      assert notice.id == correction.id
+    end
+
+    test "nobody else is shown it - including whoever made the correction", %{
+      lab_officer: lab_officer
+    } do
+      assert LabReporting.list_correction_notices(user_fixture().id) == []
+      assert LabReporting.list_correction_notices(lab_officer.id) == []
+    end
+
+    test "acknowledging clears the notice, and doing it twice is harmless", %{
+      requester: requester,
+      correction: correction
+    } do
+      assert {:ok, _} = LabReporting.acknowledge_correction(correction.id, requester)
+      assert LabReporting.list_correction_notices(requester.id) == []
+
+      assert {:ok, _} = LabReporting.acknowledge_correction(correction.id, requester)
+    end
+
+    test "only the requester can acknowledge", %{requester: requester, correction: correction} do
+      assert LabReporting.acknowledge_correction(correction.id, user_fixture()) ==
+               {:error, :not_requester}
+
+      assert [_still_there] = LabReporting.list_correction_notices(requester.id)
+    end
+
+    test "an unknown or malformed id is not found", %{requester: requester} do
+      assert LabReporting.acknowledge_correction(Ecto.UUID.generate(), requester) ==
+               {:error, :not_found}
+
+      assert LabReporting.acknowledge_correction("not-a-uuid", requester) == {:error, :not_found}
+    end
+
+    test "a second correction is a new notice, even after the first was seen", %{
+      requester: requester,
+      lab_officer: lab_officer,
+      correction: correction
+    } do
+      {:ok, _} = LabReporting.acknowledge_correction(correction.id, requester)
+      lab_test = LabReporting.get_lab_test!(correction.lab_test_id)
+
+      {:ok, _} =
+        LabReporting.correct_result(lab_test, :inconclusive, "Second repeat indeterminate.", lab_officer)
+
+      assert [notice] = LabReporting.list_correction_notices(requester.id)
+      assert notice.new_result == :inconclusive
+    end
+  end
 end

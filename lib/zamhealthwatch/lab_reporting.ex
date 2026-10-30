@@ -30,6 +30,7 @@ defmodule ZamHealthWatch.LabReporting do
   alias ZamHealthWatch.Repo
 
   alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.LabReporting.LabCorrectionAcknowledgement
   alias ZamHealthWatch.LabReporting.LabResultCorrection
   alias ZamHealthWatch.LabReporting.LabTest
 
@@ -338,6 +339,64 @@ defmodule ZamHealthWatch.LabReporting do
       from c in LabResultCorrection,
         where: c.lab_test_id == ^lab_test_id,
         order_by: [asc: c.inserted_at]
+    )
+  end
+
+  @doc """
+  Returns the corrections a user still needs to see: corrections and
+  withdrawals of results on tests *they requested*, made by someone
+  else, that they haven't marked as seen yet. Newest first.
+
+  This is the "promptly notify the person who ordered the test" half of
+  a corrected report (Iteration 15). A requester's view of a result may
+  already have shaped what they did for the patient, so a correction
+  stays in front of them until they acknowledge it, rather than being
+  one line in a history they might never look at.
+  """
+  def list_correction_notices(user_id) do
+    Repo.all(
+      from c in LabResultCorrection,
+        join: t in LabTest,
+        on: t.id == c.lab_test_id,
+        left_join: a in LabCorrectionAcknowledgement,
+        on: a.correction_id == c.id and a.user_id == ^user_id,
+        where: t.requested_by_id == ^user_id and c.corrected_by_id != ^user_id and is_nil(a.id),
+        order_by: [desc: c.inserted_at],
+        select: c
+    )
+  end
+
+  @doc """
+  Records that `user` (any map with `:id`) has seen a correction to a
+  result on a test they requested.
+
+  Only the requester can acknowledge (`{:error, :not_requester}`) - a
+  notice exists so *they* know; someone else clearing it would defeat
+  that. Acknowledging twice is harmless: the second time changes
+  nothing. An unknown or malformed id is `{:error, :not_found}`.
+  """
+  def acknowledge_correction(correction_id, %{id: user_id}) do
+    with {:ok, correction_id} <- Ecto.UUID.cast(correction_id),
+         requested_by_id when not is_nil(requested_by_id) <- requester_of(correction_id) do
+      if requested_by_id == user_id do
+        %LabCorrectionAcknowledgement{}
+        |> LabCorrectionAcknowledgement.changeset(%{correction_id: correction_id, user_id: user_id})
+        |> Repo.insert(on_conflict: :nothing, conflict_target: [:correction_id, :user_id])
+      else
+        {:error, :not_requester}
+      end
+    else
+      _not_found -> {:error, :not_found}
+    end
+  end
+
+  defp requester_of(correction_id) do
+    Repo.one(
+      from c in LabResultCorrection,
+        join: t in LabTest,
+        on: t.id == c.lab_test_id,
+        where: c.id == ^correction_id,
+        select: t.requested_by_id
     )
   end
 
