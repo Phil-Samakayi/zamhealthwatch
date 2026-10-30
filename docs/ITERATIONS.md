@@ -658,3 +658,34 @@ One issue surfaced and was fixed during verification: the `export_csv/1` row tes
 Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "No data" about four weeks after seeding; district-level risk scoring, which would let vaccination coverage feed into it; and linking drug shortages to active outbreaks.
 
 ---
+
+## Iteration 15 — Lab result corrections, done the way real systems do them (slice 1 of 3)
+
+**Why this iteration exists:** a question from using the live demo - "when a test is resulted, can it be reviewed or undone in case of a misdiagnosis?" The answer was no. `LabReporting.record_result/3` deliberately rejects a second result, the result's effect on the case is applied once and can't be reversed, and `LabTest` doesn't record who entered a result. Before designing a fix, I looked at how real lab and surveillance software handles corrections: US lab regulation (42 CFR 493.1291(k): notify the requester promptly, issue a corrected report, keep both the original and the corrected one), ISO 15189 (revised reports clearly identified as revisions), FHIR's report statuses (`corrected`, `appended`, `entered-in-error` - three different kinds of change), and SORMAS (case classification kept separate from patient outcome). Agreed plan, three slices:
+
+1. **The case model** (this slice): separate a case's classification from the patient's outcome, and stop counting ruled-out reports as cases.
+2. **A lab role and result attribution:** results recorded by a `:lab_officer` (or MOH admin), not by any role, with `resulted_by_id` stored.
+3. **Corrections:** an append-only result history (corrected / entered in error, with a required reason), case classification derived from a case's current results so a correction flows through automatically, and notification of the requester. Finding from reading the code that changes the original proposal: public SMS alerts fire when a case is first *reported* (`PublicAlerts.Subscriber` reacts to `{:created, _}`), not when it's lab-confirmed. So the relevant follow-up message isn't "correction of a confirmed alert". It's telling the same subscribers when a reported case is ruled out.
+
+**Decisions (slice 1):**
+
+- **`status` is now only the classification:** `:suspected`, `:confirmed`, or `:not_a_case`. The name stays `status` because that's what surveillance systems call it ("case status" in IDSR and CDC's NNDSS). Before, `:resolved` meant both "recovered" and "a negative lab result ruled it out". Those are opposites: one is a real case, the other never was. A negative result now sets `:not_a_case`.
+- **A new `outcome` field** (`:recovered` or `:died`, with `outcome_at`), independent of classification. A suspected case can have an outcome, since a patient can die before a lab result comes back. A ruled-out case can't. An outcome, once recorded, isn't overwritten, the same rule as a lab result: correcting it will be its own audited action, not a silent second click. The case list's "Resolve" button is replaced by "Recovered" / "Died".
+- **Manual classification is confirm-only.** A health worker can still confirm a suspected case on clinical or epidemiological grounds (a patient linked to a known cluster, say). Ruling a case out is the lab's call, through a negative result, so there's no manual path to `:not_a_case`.
+- **Ruled-out reports aren't counted.** Every aggregate except `count_cases_by_status/0` excludes `:not_a_case`: totals, by disease, by facility (and therefore the map), and the risk trend's weekly buckets. The risk trend matters most, since a cluster of reports the lab ruled out shouldn't read as a rising outbreak. `count_cases_by_status/0` still includes them, so the dashboard can show how many were ruled out. The case list still shows every report. The Epidemiology Dashboard gains "Not a case" and outcome tiles. National Reporting's "Cases (resolved)" column becomes "Ruled out (not a case)" and "Deaths", and its "Cases (total)" is now suspected plus confirmed (`FacilitySummary.case_total/1`, so the CSV and the page can't disagree).
+- **Migrating existing data without guessing.** The two old routes into `resolved` left different evidence. A negative lab result set it directly, so a `resolved` case whose latest result is negative becomes `not_a_case`. The "Resolve" button only ever appeared on confirmed cases, so every other `resolved` case becomes `confirmed` with outcome `recovered`. This also converts the live demo's data on the next deploy.
+- **`any_cases?/0`** replaces `count_cases() == 0` as the demo's "is the database empty?" check. A database holding only ruled-out cases has zero countable cases but isn't empty.
+- **Demo data:** Kabwata's week-2 negative result is now a ruled-out report, so the risk trend sees 1, 1, 3, 5 (still Elevated). The oldest confirmed cholera patient died, and two UTH malaria patients recovered, so every classification and both outcomes appear.
+
+**Built:**
+
+- [x] Migration `split_case_classification_and_outcome`: adds `outcome`/`outcome_at`, converts existing `resolved` rows as above, and indexes `outcome`.
+- [x] `Case`: `status` values `:suspected | :confirmed | :not_a_case`; `outcome`, `outcome_at`; `outcome_changeset/2`.
+- [x] `CaseManagement`: `record_outcome/3`, `count_cases_by_outcome/0`, `any_cases?/0`; `next_status/1` is confirm-only; countable-only aggregates.
+- [x] `LabReporting`: a negative result sets `:not_a_case`.
+- [x] `CaseLive.Index` (outcome column, Recovered/Died actions, forged-value handling), `EpidemiologyLive.Index` (Not a case and outcome tiles), National Reporting (columns, `case_total/1`, deaths), `Demo`.
+- [x] Tests: `CaseManagementTest` (exclusion from every total, `:not_a_case` still in by-status, outcome counts, `any_cases?/0`, every `record_outcome/3` rule), updated `LabReportingTest`/`LabLive.IndexTest`/`CaseLive.IndexTest` (outcome actions, forged values, ruled-out cases), `NationalReportingTest` (new columns, ruled-out and deaths), `DemoTest` (21 countable of 22 reports, outcomes, the adjusted trend).
+
+**Status:** pending `mix test` verification.
+
+---

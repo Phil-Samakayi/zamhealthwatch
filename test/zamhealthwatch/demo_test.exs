@@ -90,16 +90,21 @@ defmodule ZamHealthWatch.DemoTest do
 
       assert Demo.seed_activity!(now) == :seeded
 
-      assert CaseManagement.count_cases() == 22
+      # 22 reports, one of them ruled out by a negative lab result.
+      assert CaseManagement.count_cases() == 21
       assert length(LabReporting.list_lab_tests()) == 4
       assert length(DrugAvailability.list_drug_stocks()) == 8
       assert length(HospitalCapacity.list_capacity_reports()) == 4
       assert length(VaccinationMonitoring.list_vaccination_records()) == 4
 
+      assert CaseManagement.count_cases_by_status() |> Map.values() |> Enum.sum() == 22
+
       statuses = CaseManagement.count_cases_by_status()
       assert statuses[:suspected] > 0
       assert statuses[:confirmed] > 0
-      assert statuses[:resolved] > 0
+      assert statuses[:not_a_case] == 1
+
+      assert CaseManagement.count_cases_by_outcome() == %{died: 1, recovered: 2}
     end
 
     test "shapes the risk trend: Kabwata elevated, UTH stable, Monze no data", %{
@@ -110,7 +115,9 @@ defmodule ZamHealthWatch.DemoTest do
 
       scores = now |> PredictiveAnalytics.list_risk_scores() |> Map.new(&{&1.facility_id, &1})
 
-      assert scores[facilities["KBW"].id].weekly_counts == [1, 2, 3, 5]
+      # Kabwata had 1, 2, 3, 5 reports, but one week-2 report was ruled
+      # out by a negative lab result - and ruled-out reports don't count.
+      assert scores[facilities["KBW"].id].weekly_counts == [1, 1, 3, 5]
       assert scores[facilities["KBW"].id].tier == :elevated
       assert scores[facilities["UTH"].id].tier == :stable
       assert scores[facilities["MMH"].id].tier == :insufficient_data

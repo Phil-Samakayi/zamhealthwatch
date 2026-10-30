@@ -78,7 +78,10 @@ defmodule ZamHealthWatch.Demo do
   # inside PredictiveAnalytics' 7-day buckets (never on day 7/14/21
   # exactly), so the weekly counts come out as intended:
   #
-  #   * KBW: 1, 2, 3, 5 cases across the last four weeks - Elevated.
+  #   * KBW: 1, 2, 3, 5 reports across the last four weeks. One week-2
+  #     report is ruled out by a negative lab result (see
+  #     seed_case_outcomes!/2), and ruled-out reports don't count, so
+  #     the risk trend sees 1, 1, 3, 5 - still Elevated.
   #   * UTH: 2 cases every week - Stable.
   #   * NTH: 0, 0, 1, 1 - Stable.
   #   * MMH: one case six weeks ago, outside the window - No data.
@@ -194,7 +197,7 @@ defmodule ZamHealthWatch.Demo do
   cases are backdated from, overridable for tests.
   """
   def seed_activity!(now \\ DateTime.utc_now()) do
-    if CaseManagement.count_cases() == 0 do
+    if not CaseManagement.any_cases?() do
       seed_all!(now)
       :seeded
     else
@@ -270,10 +273,12 @@ defmodule ZamHealthWatch.Demo do
   end
 
   # Lab tests on four of Kabwata's cholera cases - two positive (the
-  # case moves to :confirmed), one negative (:resolved), one still
+  # case moves to :confirmed), one negative (:not_a_case), one still
   # pending - via LabReporting.record_result/3 itself, so the case-status
-  # side effect is the real one. Plus a few direct confirmations and
-  # resolutions at UTH, so the case list shows every lifecycle state.
+  # side effect is the real one. The oldest confirmed cholera patient
+  # died. At UTH, five malaria cases are confirmed clinically and two of
+  # those patients have recovered - so the case list and dashboards show
+  # every classification and both outcomes.
   defp seed_case_outcomes!(cases, worker) do
     kabwata_cholera =
       Enum.filter(cases, &(&1.disease == :cholera and &1.reported_by_id == worker.id))
@@ -282,22 +287,37 @@ defmodule ZamHealthWatch.Demo do
 
     lab_cases
     |> Enum.zip([:positive, :positive, :negative, :pending])
-    |> Enum.each(fn {case_record, outcome} ->
+    |> Enum.each(fn {case_record, result} ->
       {:ok, lab_test} =
         LabReporting.request_test(%{case_id: case_record.id, requested_by_id: worker.id})
 
-      if outcome != :pending do
-        {:ok, _resulted} = LabReporting.record_result(lab_test, outcome, :health_worker)
+      if result != :pending do
+        {:ok, _resulted} = LabReporting.record_result(lab_test, result, :health_worker)
       end
     end)
 
-    uth_malaria = Enum.filter(cases, &(&1.disease == :malaria and &1.reported_by_id != worker.id))
+    [first_lab_case | _] = lab_cases
 
-    uth_malaria
-    |> Enum.take(5)
-    |> Enum.zip([:resolved, :resolved, :confirmed, :confirmed, :confirmed])
-    |> Enum.each(fn {case_record, status} ->
-      {:ok, _updated} = CaseManagement.update_case_status(case_record, %{status: status})
+    {:ok, _died} =
+      first_lab_case.id
+      |> CaseManagement.get_case!()
+      |> CaseManagement.record_outcome(:died, :health_worker)
+
+    uth_malaria =
+      cases
+      |> Enum.filter(&(&1.disease == :malaria and &1.reported_by_id != worker.id))
+      |> Enum.take(5)
+
+    confirmed =
+      Enum.map(uth_malaria, fn case_record ->
+        {:ok, updated} = CaseManagement.update_case_status(case_record, %{status: :confirmed})
+        updated
+      end)
+
+    confirmed
+    |> Enum.take(2)
+    |> Enum.each(fn case_record ->
+      {:ok, _recovered} = CaseManagement.record_outcome(case_record, :recovered, :district_officer)
     end)
   end
 
