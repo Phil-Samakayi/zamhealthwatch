@@ -3,6 +3,7 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
 
   import ZamHealthWatchWeb.TimeHelpers, only: [time_ago: 1]
 
+  alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
@@ -16,8 +17,9 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
       <.header>
         Request a lab test
         <:subtitle>
-          Link a lab test to an existing case. A positive result confirms the case;
-          negative resolves it (ruled out); inconclusive leaves it unchanged.
+          Link a lab test to an existing case. Results are entered by lab officers: a
+          positive result confirms the case, negative rules it out, and inconclusive leaves
+          it unchanged.
         </:subtitle>
       </.header>
 
@@ -65,6 +67,7 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
         <:col :let={{_id, entry}} label="Result">
           {entry.result && Phoenix.Naming.humanize(entry.result)}
         </:col>
+        <:col :let={{_id, entry}} label="Resulted by">{resulted_by_label(entry, @users_by_id)}</:col>
         <:col :let={{_id, entry}} label="Requested">{time_ago(entry.inserted_at)}</:col>
         <:col :let={{_id, entry}} label="Actions">
           <div :if={can_record_result?(@current_scope, entry)} class="flex gap-1">
@@ -114,6 +117,7 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
       |> assign(:scope, scope)
       |> assign(:cases_by_id, Map.new(cases, &{&1.id, &1}))
       |> assign(:facilities_by_id, facilities_by_id)
+      |> assign(:users_by_id, Map.new(Accounts.list_users(), &{&1.id, user_label(&1)}))
       |> assign(:case_options, Enum.map(cases, &{case_option_label(&1, facilities_by_id), &1.id}))
       |> assign(:lab_test_count, length(lab_tests))
       |> assign_form(LabReporting.change_lab_test(%LabTest{}))
@@ -167,14 +171,14 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
   # clean error instead of crashing the LiveView.
   def handle_event("record_result", %{"id" => id, "result" => result}, socket) do
     lab_test = LabReporting.get_lab_test!(id)
-    role = socket.assigns.current_scope.user.role
+    recorder = socket.assigns.current_scope.user
 
     case to_result(result) do
       nil ->
         {:noreply, put_flash(socket, :error, "Unrecognized result value.")}
 
       result_atom ->
-        case LabReporting.record_result(lab_test, result_atom, role) do
+        case LabReporting.record_result(lab_test, result_atom, recorder) do
           {:ok, updated} ->
             # No manual stream_insert here - same "rely on the PubSub
             # round-trip" pattern CaseLive.Index's own handle_event("save",
@@ -189,8 +193,7 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
              )}
 
           {:error, :unauthorized} ->
-            {:noreply,
-             put_flash(socket, :error, "You need an assigned role to record a lab result.")}
+            {:noreply, put_flash(socket, :error, "Only a lab officer can record a lab result.")}
 
           {:error, :already_resulted} ->
             {:noreply, put_flash(socket, :error, "This test already has a recorded result.")}
@@ -273,6 +276,21 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
     end
   end
 
+  # Who entered a result. A resulted test with no `resulted_by_id` was
+  # entered before Iteration 15 started recording it - said plainly
+  # rather than left blank, so it doesn't read as missing data.
+  defp resulted_by_label(%LabTest{status: :pending}, _users_by_id), do: ""
+  defp resulted_by_label(%LabTest{resulted_by_id: nil}, _users_by_id), do: "Not recorded"
+
+  defp resulted_by_label(%LabTest{resulted_by_id: user_id}, users_by_id),
+    do: Map.get(users_by_id, user_id, "Unknown user")
+
+  # Same "email, else phone" identity rule CaseLive.Index's
+  # reporter_label/1 uses.
+  defp user_label(%{email: email}) when is_binary(email), do: email
+  defp user_label(%{phone: phone}) when is_binary(phone), do: phone
+  defp user_label(_user), do: "Unknown user"
+
   defp status_badge_class(:pending), do: "badge-warning"
   defp status_badge_class(:resulted), do: "badge-success"
 
@@ -282,7 +300,7 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
   # UI nicety, not an authorization boundary on its own (same precedent
   # CaseLive.Index.can_advance_status?/2 already set).
   defp can_record_result?(current_scope, %LabTest{status: :pending}) do
-    not is_nil(current_scope.user.role)
+    LabReporting.can_record_results?(current_scope.user.role)
   end
 
   defp can_record_result?(_current_scope, _lab_test), do: false

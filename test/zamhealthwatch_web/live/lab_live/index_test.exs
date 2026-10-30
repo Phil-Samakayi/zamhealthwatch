@@ -193,7 +193,8 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
     setup %{conn: conn} do
       facility = facility_fixture(%{name: "Test Clinic"})
       case_record = case_fixture(%{disease: :cholera, facility_id: facility.id})
-      %{conn: conn, case_record: case_record}
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+      %{conn: conn, case_record: case_record, lab_officer: lab_officer}
     end
 
     test "shows no action buttons for a user with no assigned role", %{
@@ -210,14 +211,13 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       refute has_element?(lv, row_selector(lab_test) <> " button")
     end
 
-    test "shows Positive/Negative/Inconclusive buttons for a pending test when the user has a role",
-         %{conn: conn, case_record: case_record} do
+    test "shows Positive/Negative/Inconclusive buttons for a pending test to a lab officer",
+         %{conn: conn, case_record: case_record, lab_officer: lab_officer} do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:health_worker, case_record.facility_id)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       assert has_element?(lv, row_selector(lab_test) <> " button", "Positive")
@@ -225,32 +225,64 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       assert has_element?(lv, row_selector(lab_test) <> " button", "Inconclusive")
     end
 
-    test "shows no action buttons for an already-resulted test, even with a role assigned", %{
+    test "shows no result buttons to roles other than lab officer", %{
       conn: conn,
       case_record: case_record
     } do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, :health_worker)
-      user = user_fixture() |> set_role(:moh_admin)
+
+      for role <- [:district_officer, :moh_admin] do
+        {:ok, lv, _html} =
+          conn
+          |> log_in_user(user_fixture() |> set_role(role))
+          |> live(~p"/labs")
+
+        refute has_element?(lv, row_selector(lab_test) <> " button")
+      end
+    end
+
+    test "shows no action buttons for an already-resulted test, even to a lab officer", %{
+      conn: conn,
+      case_record: case_record,
+      lab_officer: lab_officer
+    } do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       refute has_element?(lv, row_selector(lab_test) <> " button")
     end
 
-    test "clicking Positive records the result and confirms the linked case", %{
+    test "shows who entered a result", %{
       conn: conn,
-      case_record: case_record
+      case_record: case_record,
+      lab_officer: lab_officer
     } do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:health_worker, case_record.facility_id)
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(user_fixture() |> set_role(:district_officer))
+        |> live(~p"/labs")
+
+      assert has_element?(lv, row_selector(lab_test), lab_officer.email)
+    end
+
+    test "clicking Positive records the result and confirms the linked case", %{
+      conn: conn,
+      case_record: case_record,
+      lab_officer: lab_officer
+    } do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       result =
@@ -261,19 +293,20 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       assert result =~ "Result recorded: Positive."
       assert has_element?(lv, row_selector(lab_test), "Positive")
       assert LabReporting.get_lab_test!(lab_test.id).status == :resulted
+      assert LabReporting.get_lab_test!(lab_test.id).resulted_by_id == lab_officer.id
       assert CaseManagement.get_case!(case_record.id).status == :confirmed
     end
 
     test "clicking Negative records the result and rules the linked case out", %{
       conn: conn,
-      case_record: case_record
+      case_record: case_record,
+      lab_officer: lab_officer
     } do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:district_officer)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       lv
@@ -285,14 +318,14 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
 
     test "clicking Inconclusive records the result and leaves the case status unchanged", %{
       conn: conn,
-      case_record: case_record
+      case_record: case_record,
+      lab_officer: lab_officer
     } do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:moh_admin)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       lv
@@ -302,7 +335,7 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       assert CaseManagement.get_case!(case_record.id).status == :suspected
     end
 
-    test "a forged record_result event is rejected server-side for a user with no role", %{
+    test "a forged record_result event is rejected server-side for a non-lab role", %{
       conn: conn,
       case_record: case_record
     } do
@@ -310,26 +343,26 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user_fixture())
+        |> log_in_user(user_fixture() |> set_role(:district_officer))
         |> live(~p"/labs")
 
       result = render_click(lv, "record_result", %{"id" => lab_test.id, "result" => "positive"})
 
-      assert result =~ "You need an assigned role to record a lab result."
+      assert result =~ "Only a lab officer can record a lab result."
       assert LabReporting.get_lab_test!(lab_test.id).status == :pending
     end
 
     test "a forged record_result event on an already-resulted test is rejected", %{
       conn: conn,
-      case_record: case_record
+      case_record: case_record,
+      lab_officer: lab_officer
     } do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      {:ok, resulted} = LabReporting.record_result(lab_test, :positive, :health_worker)
-      user = user_fixture() |> set_role(:health_worker)
+      {:ok, resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       result = render_click(lv, "record_result", %{"id" => resulted.id, "result" => "negative"})
@@ -339,13 +372,12 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
     end
 
     test "a forged record_result event with an unrecognized result value is rejected gracefully",
-         %{conn: conn, case_record: case_record} do
+         %{conn: conn, case_record: case_record, lab_officer: lab_officer} do
       lab_test = lab_test_fixture(%{case_id: case_record.id})
-      user = user_fixture() |> set_role(:health_worker)
 
       {:ok, lv, _html} =
         conn
-        |> log_in_user(user)
+        |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
       result = render_click(lv, "record_result", %{"id" => lab_test.id, "result" => "hacked"})
