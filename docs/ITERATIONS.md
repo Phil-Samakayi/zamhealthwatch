@@ -742,6 +742,32 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `LabLive.Index`: Correct/Withdraw actions, a correction panel (result picker and reason, with validation errors shown inline), Corrected/Withdrawn badges, struck-through withdrawn results, and a facility-scoped correction history.
 - [x] Tests: `LabReportingTest` (correct, correct twice in order, MOH admin, other roles refused, reason validation leaves everything unchanged, unchanged and not-correctable refusals, broadcast, a positive on another test still confirming, withdrawal, clinical confirmation surviving a withdrawal, nothing after withdrawal), `CaseManagementTest` (every `classification_for/2` rule, `apply_lab_verdict/2`, clinical confirmation recorded), `LabLive.IndexTest` (correct and withdraw through the panel, a too-short reason shown as an error, MOH admin access, district officer refused even with forged events), `NationalReportingTest`, `DemoTest`.
 
-**Status:** pending `mix test` verification.
+**Status:** 538 tests, 0 failures, first run. Migration and backfill applied cleanly. Closed.
+
+---
+
+## Iteration 15 — Lab result corrections (slice 4 of 4)
+
+**Goal:** the notifications. A correction is only half done if the people who acted on the wrong result never find out. Two audiences: the person who requested the test (lab regulation: "promptly notify the authorized person ordering the test"), and the public alert subscribers who were warned when the case was first reported.
+
+**Decisions:**
+
+- **Requester notices, kept until acknowledged.** `LabReporting.list_correction_notices/1` returns corrections and withdrawals of results on tests a user requested that they haven't marked as seen yet. Corrections they made themselves are excluded, since they already know. The lab screen shows each one (case, old → new, reason) with a "Mark as seen" button. The Portal shows a count with a link to the lab screen, for any user, with or without a facility, because anyone can request a test. A notice stays in front of the requester instead of being one line in a history they might never look at, because their view of the old result may already have shaped what they did for the patient.
+- **Acknowledgement is its own recorded fact** (`lab_correction_acknowledgements`: who, which correction, when), kept beside the correction history rather than written into it, so correction rows are still never updated. Only the requester can acknowledge, since a notice exists so *they* know. Acknowledging twice is harmless (unique index plus `on_conflict: :nothing`). A later correction to the same test is a new notice, even if the earlier one was seen.
+- **Public follow-ups for ruled-out cases.** Alerts go out when a case is first *reported* (`AlertWorker`, unchanged). Now, when a case moves into `:not_a_case`, subscribers get "the Cholera case reported at Kabwata Clinic on 03 Oct 2026 has been ruled out by laboratory testing". When a correction moves a case back *out* of `:not_a_case`, they get a plain correction: "we said … had been ruled out. That was wrong - the case is confirmed / under investigation again." A case simply being confirmed sends nothing, because the original alert already gave the right advice. `ReclassificationAlertWorker` does the sending, enqueued by `PublicAlerts.Subscriber`.
+- **Reclassifications get their own PubSub topic** (`"case_reclassifications"`, `{:reclassified, case, previous_status}`), sent only when `status` actually changes. Not on `"cases"`: every LiveView subscribed there pattern-matches `{:created, _}`/`{:updated, _}` only, and a new message shape on that topic would crash each of them. Only the alert subscriber, which cares about the *transition*, listens.
+- **SMS delivery shared, not copied.** `PublicAlerts.deliver_to/2` now holds the send-and-retry rule (only "every send failed" is worth retrying), used by both `AlertWorker` and the new worker, so the two can't drift apart.
+- **Demo:** the demo correction is on a test the demo health worker requested, so logging in as `health.worker@example.com` shows a real notice on the Portal and the lab screen. Known demo limitation: once any visitor marks it as seen, it's gone for everyone until the database is reseeded. Demo accounts are reset on boot, but their acknowledgements aren't.
+
+**Built:**
+
+- [x] Migration `add_lab_correction_acknowledgements`; `LabReporting.LabCorrectionAcknowledgement`.
+- [x] `LabReporting.list_correction_notices/1`, `acknowledge_correction/2`.
+- [x] `CaseManagement.subscribe_reclassifications/0` and reclassification broadcasts from every status change.
+- [x] `PublicAlerts.deliver_to/2` (extracted from `AlertWorker`); `PublicAlerts.ReclassificationAlertWorker`; `Subscriber` enqueues it for transitions into and out of `:not_a_case`.
+- [x] `LabLive.Index` notices panel with "Mark as seen"; `PortalLive.Index` notice count with a link.
+- [x] Tests: `LabReportingTest` (requester sees it, nobody else and not the corrector, acknowledge clears it and is idempotent, only the requester can, unknown/malformed ids, a second correction is a new notice), `CaseManagementTest` (reclassification broadcast from a lab verdict and from Confirm, none when unchanged), `SubscriberTest` (follow-up on ruled out, correction on reinstatement, nothing on a plain confirmation), new `ReclassificationAlertWorkerTest` (all three messages, delivery to every subscriber), `LabLive.IndexTest` (requester sees and clears the notice, others don't see it, forged acknowledgement refused), `PortalLive.IndexTest` (count and link shown only when there's something to review).
+
+**Status:** pending `mix test` verification. With this slice, Iteration 15 is complete: corrections that keep the original result, require a reason, recalculate the case's classification, and tell the people affected.
 
 ---
