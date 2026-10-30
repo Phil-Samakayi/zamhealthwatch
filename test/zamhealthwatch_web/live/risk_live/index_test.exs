@@ -5,9 +5,11 @@ defmodule ZamHealthWatchWeb.RiskLive.IndexTest do
   import ZamHealthWatch.AccountsFixtures
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.HospitalCapacityFixtures
+  import ZamHealthWatch.VaccinationMonitoringFixtures
 
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.HospitalCapacity
+  alias ZamHealthWatch.VaccinationMonitoring
 
   describe "Outbreak risk" do
     test "redirects if user is not logged in", %{conn: conn} do
@@ -96,6 +98,74 @@ defmodule ZamHealthWatchWeb.RiskLive.IndexTest do
       row = lv |> element("#district-#{district.id}") |> render()
       assert row =~ "No data"
       assert row =~ "No cases in the last 4 weeks"
+      assert row =~ "No coverage data"
+    end
+
+    test "raises measles to High where coverage leaves an immunity gap, and says why", %{
+      conn: conn
+    } do
+      district = district_fixture(%{name: "Monze"})
+      facility = facility_fixture(%{district_id: district.id})
+      user = user_fixture()
+
+      {:ok, _case} =
+        CaseManagement.create_case(%{
+          disease: :measles,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      vaccination_record_fixture(%{
+        district_id: district.id,
+        antigen: :measles_rubella,
+        doses_administered: 1900,
+        target_population: 4000
+      })
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/risk")
+
+      assert has_element?(lv, "#district-#{district.id} span.badge-error", "High")
+      assert has_element?(lv, "#district-#{district.id} span.badge-warning", "47.5% - gap")
+
+      assert lv |> element("#district-#{district.id}") |> render() =~
+               "Cases with Measles-Rubella coverage at 47.5%"
+    end
+
+    test "updates a district live when vaccination coverage is reported", %{conn: conn} do
+      district = district_fixture(%{name: "Coverage District"})
+      facility = facility_fixture(%{district_id: district.id})
+      user = user_fixture()
+
+      {:ok, _case} =
+        CaseManagement.create_case(%{
+          disease: :measles,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/risk")
+
+      assert has_element?(lv, "#district-#{district.id} span.badge-ghost", "No coverage data")
+      refute has_element?(lv, "#district-#{district.id} span.badge-error", "High")
+
+      {:ok, _record} =
+        VaccinationMonitoring.record_vaccination(%{
+          antigen: :measles_rubella,
+          campaign: "Routine - 2026",
+          doses_administered: 70,
+          target_population: 100,
+          district_id: district.id,
+          reported_by_id: user.id
+        })
+
+      assert has_element?(lv, "#district-#{district.id} span.badge-error", "High")
+      assert has_element?(lv, "#district-#{district.id} span.badge-warning", "70.0% - gap")
     end
 
     test "updates a district live when a case is reported at one of its facilities", %{
