@@ -794,3 +794,27 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 **Status:** 568 tests, 0 failures, first run. Closed. Deployed: Render picked `DEMO_RESET_ON_BOOT` up from `render.yaml` through the Blueprint sync, so no dashboard change was needed. The first boot logged "cleared 46 rows of demo activity", the home page shows the reset notice, and the demo health worker saw the correction notice on the Portal for the first time. Still to confirm: that the free instance actually spins down when idle despite Render's `/health` checks every 5 seconds. If it doesn't, the reset only runs on deploys, and the fix is to also reset when the demo data is older than a set age.
 
 ---
+
+## Iteration 17 — District-level risk scoring (slice 1 of 2)
+
+**Goal:** the brief's "district-level outbreak risk scoring", which Iteration 2's Predictive Analytics slice scoped down to per-facility scoring because facilities didn't have a district yet (Iteration 3 then gave them one). This slice adds the district read, trending each disease separately. Slice 2 brings in vaccination coverage.
+
+**Decisions:**
+
+- **Per district and per disease, not all diseases added together.** Real surveillance thresholds are per disease and per district: Zambia's IDSR works that way, and ZNPHI's automated alert thresholds (piloted from January 2025) go to district surveillance officers. Adding diseases together lets a rise in one hide behind a fall in another. Cholera going 1, 2, 3, 4 a week while malaria goes 4, 3, 2, 1 adds up to a flat 5 a week, which the facility read calls Stable. A test pins exactly that case down.
+- **A district's tier is its worst disease's tier,** and the page lists each disease's trend under it, worst first, so the reason for the tier is visible. A district with no cases in the window is "No data", as for facilities.
+- **Same arithmetic as the facility read:** four 7-day windows, an Nx least-squares slope, and Elevated at 0.5 or more extra cases a week. The windows are now built once (`weekly_windows/1`) and counted two ways, rather than duplicated.
+- **The facility read stays.** Hospital capacity is reported per facility, and a district officer still needs to see which clinic is under strain. `/risk` shows the district table first and the facility table below it.
+- **Facilities without a district aren't counted in any district.** They still appear in the facility table. The seeded reference facilities all have a district.
+- **Counting stays in `CaseManagement`:** a new `count_cases_by_facility_and_disease_between/2`, with the same window, the same exclusion of ruled-out cases, and zero-omission as `count_cases_by_facility_between/2`. `PredictiveAnalytics` maps facilities to districts through `Geography`'s public API.
+
+**Built:**
+
+- [x] `CaseManagement.count_cases_by_facility_and_disease_between/2`.
+- [x] `PredictiveAnalytics.list_district_risks/1`; `DistrictRisk` and `DiseaseTrend` structs; shared `weekly_windows/1`.
+- [x] `RiskLive.Index`: "By district" table (`#district-risks`, one row per district, each disease's weekly counts and tier) above the facility table, updating live on new and updated cases.
+- [x] Tests: `CaseManagementTest` (grouping by facility and disease, ruled-out cases skipped, window edges), `PredictiveAnalyticsTest` (empty district, same disease added across facilities, rising and falling diseases kept apart while the facility read sees a flat line, facility without a district left out, out-of-window case ignored, sort order), `RiskLive.IndexTest` (district row with per-disease trends, no-data district, live update, empty state).
+
+**Status:** pending `mix test` verification.
+
+---
