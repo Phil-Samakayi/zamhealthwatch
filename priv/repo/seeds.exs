@@ -129,6 +129,19 @@ IO.puts(
     "(password reset to the published demo password)."
 )
 
+# Public demo only (Iteration 16): with DEMO_RESET_ON_BOOT=true, wipe
+# the demo activity first, so seed_activity! below finds an empty
+# database and seeds it afresh, dated from now. Off unless that variable
+# is set - never set it on a database holding real data.
+if ZamHealthWatch.Demo.reset_on_boot?() do
+  deleted = ZamHealthWatch.Demo.reset_activity!()
+
+  IO.puts(
+    "DEMO_RESET_ON_BOOT is set - cleared #{deleted |> Map.values() |> Enum.sum()} " <>
+      "rows of demo activity."
+  )
+end
+
 case ZamHealthWatch.Demo.seed_activity!() do
   :seeded -> IO.puts("Seeded demo activity: cases, lab tests, stock, capacity, coverage.")
   :skipped -> IO.puts("Cases already exist - demo activity left untouched.")

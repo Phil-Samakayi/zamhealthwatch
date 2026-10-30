@@ -23,6 +23,12 @@ end
 config :zamhealthwatch, ZamHealthWatchWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Public demo only (Iteration 16): wipe and reseed demo activity every
+# time priv/repo/seeds.exs runs, which on the deployed app is every boot.
+# See ZamHealthWatch.Demo.reset_activity!/0. Never set this on a
+# deployment holding real data.
+config :zamhealthwatch, :demo_reset_on_boot, System.get_env("DEMO_RESET_ON_BOOT") == "true"
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :zamhealthwatch, ZamHealthWatchWeb.Endpoint,

@@ -1,17 +1,22 @@
 defmodule ZamHealthWatch.DemoTest do
   use ZamHealthWatch.DataCase
+  use Oban.Testing, repo: ZamHealthWatch.Repo
 
   alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.Demo
   alias ZamHealthWatch.DrugAvailability
+  alias ZamHealthWatch.Geography
   alias ZamHealthWatch.HospitalCapacity
   alias ZamHealthWatch.LabReporting
   alias ZamHealthWatch.PredictiveAnalytics
+  alias ZamHealthWatch.PublicAlerts
+  alias ZamHealthWatch.PublicAlerts.AlertWorker
   alias ZamHealthWatch.VaccinationMonitoring
 
   import ZamHealthWatch.CaseManagementFixtures
   import ZamHealthWatch.GeographyFixtures
+  import ZamHealthWatch.PublicAlertsFixtures
 
   # The same reference facilities/districts priv/repo/seeds.exs creates -
   # Demo looks them up by code and name, so the tests need the real ones.
@@ -143,5 +148,104 @@ defmodule ZamHealthWatch.DemoTest do
       assert Demo.seed_activity!() == :skipped
       assert CaseManagement.count_cases() == 1
     end
+  end
+
+  describe "reset_activity!/0" do
+    setup :seed_reference_data
+
+    setup do
+      Demo.ensure_accounts!()
+      :seeded = Demo.seed_activity!(DateTime.utc_now() |> DateTime.truncate(:second))
+      :ok
+    end
+
+    test "clears every kind of demo activity" do
+      alert_subscriber_fixture(%{phone: "+260971111111"})
+
+      Demo.reset_activity!()
+
+      refute CaseManagement.any_cases?()
+      assert LabReporting.list_lab_tests() == []
+      assert LabReporting.list_corrections() == []
+      assert DrugAvailability.list_drug_stocks() == []
+      assert HospitalCapacity.list_capacity_reports() == []
+      assert VaccinationMonitoring.list_vaccination_records() == []
+      assert PublicAlerts.list_subscriber_phones() == []
+    end
+
+    test "keeps the demo accounts, districts, and facilities" do
+      Demo.reset_activity!()
+
+      assert length(Geography.list_districts()) == 3
+      assert length(Geography.list_facilities()) == 4
+
+      for %{email: email} <- Demo.accounts() do
+        assert Accounts.get_user_by_email_and_password(email, Demo.password())
+      end
+    end
+
+    test "returns how many rows it deleted from each table" do
+      deleted = Demo.reset_activity!()
+
+      assert deleted["cases"] == 22
+      assert deleted["lab_tests"] == 4
+      assert deleted["lab_result_corrections"] == 1
+      assert deleted["lab_correction_acknowledgements"] == 0
+      assert deleted["drug_stocks"] == 8
+      assert deleted["capacity_reports"] == 4
+      assert deleted["vaccination_records"] == 4
+    end
+
+    test "removes alert jobs that are still waiting to run" do
+      {:ok, _job} = %{"case_id" => Ecto.UUID.generate()} |> AlertWorker.new() |> Oban.insert()
+      assert_enqueued worker: AlertWorker
+
+      assert Demo.reset_activity!()["oban_jobs"] == 1
+      refute_enqueued worker: AlertWorker
+    end
+
+    test "followed by seed_activity!/1, brings back a correction notice someone already marked as seen" do
+      worker = Accounts.get_user_by_email("health.worker@example.com")
+      [notice] = LabReporting.list_correction_notices(worker.id)
+      {:ok, _ack} = LabReporting.acknowledge_correction(notice.id, worker)
+      assert LabReporting.list_correction_notices(worker.id) == []
+
+      Demo.reset_activity!()
+
+      assert Demo.seed_activity!() == :seeded
+      assert [_notice] = LabReporting.list_correction_notices(worker.id)
+      assert CaseManagement.count_cases() == 21
+    end
+  end
+
+  describe "reset_on_boot?/0" do
+    setup :restore_reset_flag
+
+    test "is off unless configured" do
+      Application.delete_env(:zamhealthwatch, :demo_reset_on_boot)
+      refute Demo.reset_on_boot?()
+
+      Application.put_env(:zamhealthwatch, :demo_reset_on_boot, false)
+      refute Demo.reset_on_boot?()
+    end
+
+    test "is on when configured" do
+      Application.put_env(:zamhealthwatch, :demo_reset_on_boot, true)
+      assert Demo.reset_on_boot?()
+    end
+  end
+
+  # The flag is global application config, so put back whatever
+  # config/runtime.exs set once the test is done. (This module isn't
+  # async, so no other test sees the temporary value.)
+  defp restore_reset_flag(_context) do
+    original = Application.fetch_env(:zamhealthwatch, :demo_reset_on_boot)
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:zamhealthwatch, :demo_reset_on_boot, value)
+        :error -> Application.delete_env(:zamhealthwatch, :demo_reset_on_boot)
+      end
+    end)
   end
 end

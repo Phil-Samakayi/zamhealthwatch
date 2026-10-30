@@ -19,6 +19,15 @@ defmodule ZamHealthWatch.Demo do
       hospital over capacity, one district with low measles coverage - so
       every screen, including `/risk` and `/reports/national`, has
       something real to show.
+    * **Shared demo data goes stale and gets used up** (Iteration 16).
+      The risk trend is dated relative to when the data was seeded, so
+      it drifts to "No data" about four weeks later, and one visitor's
+      changes (a ruled-out case, a correction notice marked as seen) are
+      what every later visitor finds. On the public deployment,
+      `DEMO_RESET_ON_BOOT=true` makes `priv/repo/seeds.exs` call
+      `reset_activity!/0` and then `seed_activity!/1` on every boot, so
+      each visitor after an idle spell starts from the same fresh,
+      correctly dated demo.
 
   `ensure_accounts!/0` resets each demo account's password, role, and
   facility on every call. Every demo visitor shares these logins, so one
@@ -35,18 +44,27 @@ defmodule ZamHealthWatch.Demo do
   no context exposes on purpose: backdating a case's `inserted_at` (so
   the four-week risk trend has a shape), and setting a demo account's
   password/confirmation without going through the logged-in,
-  sudo-mode-gated settings flow.
+  sudo-mode-gated settings flow. `reset_activity!/0` is a third: no
+  context offers a "delete everything" function, and none should.
   """
+
+  import Ecto.Query, only: [from: 2]
 
   alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.Accounts.User
   alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.DrugAvailability
+  alias ZamHealthWatch.DrugAvailability.DrugStock
   alias ZamHealthWatch.Geography
   alias ZamHealthWatch.HospitalCapacity
+  alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.LabReporting
+  alias ZamHealthWatch.LabReporting.{LabCorrectionAcknowledgement, LabResultCorrection, LabTest}
+  alias ZamHealthWatch.PublicAlerts.AlertSubscriber
   alias ZamHealthWatch.Repo
   alias ZamHealthWatch.VaccinationMonitoring
+  alias ZamHealthWatch.VaccinationMonitoring.VaccinationRecord
 
   @password "zamhealthwatch-demo"
 
@@ -94,8 +112,9 @@ defmodule ZamHealthWatch.Demo do
   #   * MMH: one case six weeks ago, outside the window - No data.
   #
   # The trend is relative to the moment of seeding, so it ages: four
-  # weeks after a fresh database is seeded, these cases fall out of the
-  # risk window. Logged in docs/ITERATIONS.md as a known limitation.
+  # weeks after a database is seeded, these cases fall out of the risk
+  # window. With DEMO_RESET_ON_BOOT set, every boot reseeds from "now",
+  # so the public demo never gets that old (see reset_activity!/0).
   @demo_cases [
     {"KBW", :cholera, 24},
     {"KBW", :cholera, 17},
@@ -119,6 +138,23 @@ defmodule ZamHealthWatch.Demo do
     {"NTH", :measles, 12},
     {"NTH", :measles, 3},
     {"MMH", :malaria, 40}
+  ]
+
+  # Every table that holds demo *activity*, children before parents so
+  # the `on_delete: :restrict` foreign keys are never violated. User
+  # accounts and the reference districts and facilities aren't here:
+  # those are reset or upserted by ensure_accounts!/0 and seeds.exs, not
+  # wiped. Alert subscribers are, because on a public demo they're
+  # visitors' phone numbers, which shouldn't outlive the demo session.
+  @activity_schemas [
+    LabCorrectionAcknowledgement,
+    LabResultCorrection,
+    LabTest,
+    Case,
+    DrugStock,
+    CapacityReport,
+    VaccinationRecord,
+    AlertSubscriber
   ]
 
   # {facility code, medicine, quantity on hand, reorder level}
@@ -191,6 +227,56 @@ defmodule ZamHealthWatch.Demo do
     facility_id = facility_code && facility_id!(facility_code)
     {:ok, user} = Accounts.assign_user_role(user, %{role: role, facility_id: facility_id})
     user
+  end
+
+  @doc """
+  Whether this deployment wipes and reseeds demo activity on every boot.
+
+  Set by `DEMO_RESET_ON_BOOT=true` (read in `config/runtime.exs`). Off
+  unless that's set, so a developer's database, or any deployment
+  holding real data, is never wiped by accident.
+  """
+  def reset_on_boot?, do: Application.get_env(:zamhealthwatch, :demo_reset_on_boot, false) == true
+
+  @doc """
+  Deletes all demo activity: cases, lab tests and their corrections and
+  acknowledgements, drug stock, capacity reports, vaccination records,
+  alert subscribers, and alert jobs still waiting to run. Keeps user
+  accounts, districts, and facilities.
+
+  Destructive and unconditional - the caller decides whether to call
+  it. `priv/repo/seeds.exs` only does so when `reset_on_boot?/0` is
+  true, and follows it with `seed_activity!/1`, which then finds an
+  empty database and seeds it afresh.
+
+  Runs in one transaction, so a failure part-way leaves everything as
+  it was. Returns the number of rows deleted, keyed by table name.
+  """
+  def reset_activity! do
+    {:ok, deleted} =
+      Repo.transact(fn ->
+        # Jobs first: an alert job for a case that no longer exists
+        # would fail on every one of its retries.
+        {jobs, _} = Repo.delete_all(waiting_alert_jobs())
+
+        tables =
+          Enum.map(@activity_schemas, fn schema ->
+            {count, _} = Repo.delete_all(schema)
+            {schema.__schema__(:source), count}
+          end)
+
+        {:ok, Map.new([{"oban_jobs", jobs} | tables])}
+      end)
+
+    deleted
+  end
+
+  # Alert jobs that haven't run yet. Completed, discarded, and cancelled
+  # ones are left for Oban's Pruner, and a job that's executing right
+  # now is left to finish.
+  defp waiting_alert_jobs do
+    from j in Oban.Job,
+      where: j.queue == "alerts" and j.state in ["available", "scheduled", "retryable"]
   end
 
   @doc """
