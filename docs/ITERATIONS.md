@@ -841,6 +841,6 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] Demo: measles cases at Monze; `DemoTest` updated for 24 reports and the district tiers.
 - [x] Tests: `VaccinationMonitoringTest` (latest per district, other antigens ignored), `PredictiveAnalyticsTest` (gap raises measles to High, 95% doesn't, no record doesn't, gap without measles changes nothing including other diseases, latest record used, High sorts above Elevated), `RiskLive.IndexTest` (High with its reason and the gap badge, "No coverage data", live update on a new coverage record), `DemoTest` (Monze High, Lusaka Elevated, Ndola Stable).
 
-**Status:** pending `mix test` verification.
+**Status:** 590 tests, 0 failures, first run. Closed. With this slice, Iteration 17 is complete: risk is scored per district and per disease, and measles-rubella coverage raises measles risk where it leaves an immunity gap.
 
 ---
