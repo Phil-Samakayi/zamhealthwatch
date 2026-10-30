@@ -32,6 +32,11 @@ defmodule ZamHealthWatch.CaseManagement.Case do
     field :outcome, Ecto.Enum, values: [:recovered, :died]
     field :outcome_at, :utc_datetime
 
+    # Who recorded `outcome` (Iteration 18), so a correction history can
+    # say whose entry it corrected. `nil` with no outcome, and for
+    # outcomes recorded before this was stored.
+    field :outcome_recorded_by_id, :binary_id
+
     # When a person confirmed this case on clinical or epidemiological
     # grounds (the case list's Confirm button), or `nil` if nobody has.
     # Kept as its own fact since Iteration 15 so that `status` can be
@@ -100,9 +105,31 @@ defmodule ZamHealthWatch.CaseManagement.Case do
   """
   def outcome_changeset(case, attrs) do
     case
-    |> cast(attrs, [:outcome])
+    |> cast(attrs, [:outcome, :outcome_recorded_by_id])
     |> validate_required([:outcome])
     |> put_change(:outcome_at, DateTime.utc_now(:second))
+    |> foreign_key_constraint(:outcome_recorded_by_id)
+  end
+
+  @doc """
+  A case changeset for correcting a recorded outcome to `new_outcome`
+  (Iteration 18). Keeps `outcome_at` and `outcome_recorded_by_id`: the
+  original entry's time and author stay as they were, and the correction
+  itself is recorded in `CaseManagement.OutcomeCorrection`.
+  """
+  def outcome_correction_changeset(case, new_outcome) do
+    case
+    |> cast(%{outcome: new_outcome}, [:outcome])
+    |> validate_required([:outcome])
+  end
+
+  @doc """
+  A case changeset for removing an outcome recorded in error (Iteration
+  18): the case goes back to having no outcome, so one can be recorded
+  afresh.
+  """
+  def outcome_withdrawal_changeset(case) do
+    change(case, outcome: nil, outcome_at: nil, outcome_recorded_by_id: nil)
   end
 
   @doc """

@@ -28,6 +28,12 @@ defmodule ZamHealthWatch.CaseManagement do
   alias ZamHealthWatch.Repo
 
   alias ZamHealthWatch.CaseManagement.Case
+  alias ZamHealthWatch.CaseManagement.OutcomeCorrection
+
+  # Who may correct or remove a recorded outcome (Iteration 18): the
+  # supervisory roles, so a recorded death can't be quietly reversed by
+  # the person who entered it. Mirrors LabReporting's correction roles.
+  @outcome_correction_roles [:district_officer, :moh_admin]
 
   @doc """
   Subscribes to notifications about any case changes.
@@ -342,29 +348,31 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Records the patient's outcome (`:recovered` or `:died`) on behalf of a
-  user holding `role`.
+  Records the patient's outcome (`:recovered` or `:died`) on behalf of
+  `recorder` (any map with `:id` and `:role`), storing who recorded it
+  (Iteration 18).
 
   Rejected when:
 
-    * `role` is `nil` - same rule as `advance_case_status/2`.
+    * the recorder's role is `nil` - same rule as `advance_case_status/2`.
     * the case is `:not_a_case` - ruled out means there's no case of
       this disease to have an outcome *of*.
     * an outcome is already recorded - same "terminal once set" call
       `LabReporting.record_result/3` makes for a lab result, so a
       mis-click can't silently overwrite a recorded death. Correcting a
-      wrong outcome is its own, audited action, not an overwrite.
+      wrong outcome is its own, audited action: `correct_outcome/4` or
+      `withdraw_outcome/3`.
 
   ## Examples
 
-      iex> record_outcome(case, :recovered, :health_worker)
+      iex> record_outcome(case, :recovered, %{id: user_id, role: :health_worker})
       {:ok, %Case{outcome: :recovered}}
 
-      iex> record_outcome(%Case{status: :not_a_case}, :died, :health_worker)
+      iex> record_outcome(%Case{status: :not_a_case}, :died, %{id: user_id, role: :health_worker})
       {:error, :not_a_case}
 
   """
-  def record_outcome(%Case{} = case, outcome, role) do
+  def record_outcome(%Case{} = case, outcome, %{id: recorder_id, role: role}) do
     cond do
       is_nil(role) ->
         {:error, :unauthorized}
@@ -378,12 +386,145 @@ defmodule ZamHealthWatch.CaseManagement do
       true ->
         with {:ok, case = %Case{}} <-
                case
-               |> Case.outcome_changeset(%{outcome: outcome})
+               |> Case.outcome_changeset(%{outcome: outcome, outcome_recorded_by_id: recorder_id})
                |> Repo.update() do
           broadcast_case({:updated, case})
           {:ok, case}
         end
     end
+  end
+
+  @doc """
+  Whether a user holding `role` may correct or remove a recorded
+  outcome: district officers and MOH admins (Iteration 18).
+  """
+  def can_correct_outcomes?(role), do: role in @outcome_correction_roles
+
+  @doc """
+  Changes a recorded outcome to `new_outcome`, on behalf of `corrector`
+  (any map with `:id` and `:role`), with a required `reason`.
+
+  The previous outcome isn't lost: an `OutcomeCorrection` row records
+  what it was, what it became, why, who, and when, in the same
+  transaction as the change. A correction can itself be corrected; each
+  adds to the history. Death counts on the dashboards and in National
+  Reporting follow automatically, since they're worked out from each
+  case's current outcome.
+
+  Refused when the corrector's role can't correct outcomes
+  (`:unauthorized`), the case has no outcome to correct (`:no_outcome`),
+  or `new_outcome` is the one it already has (`:unchanged`). A missing
+  or too-short reason, or an invalid outcome, comes back as
+  `{:error, %Ecto.Changeset{}}` with nothing changed.
+  """
+  def correct_outcome(%Case{} = case_record, new_outcome, reason, %{id: corrector_id, role: role}) do
+    cond do
+      not can_correct_outcomes?(role) ->
+        {:error, :unauthorized}
+
+      is_nil(case_record.outcome) ->
+        {:error, :no_outcome}
+
+      new_outcome == case_record.outcome ->
+        {:error, :unchanged}
+
+      true ->
+        Repo.transact(fn ->
+          with {:ok, _correction} <-
+                 insert_outcome_correction(
+                   case_record,
+                   :corrected,
+                   new_outcome,
+                   reason,
+                   corrector_id
+                 ) do
+            case_record
+            |> Case.outcome_correction_changeset(new_outcome)
+            |> Repo.update()
+          end
+        end)
+        |> broadcast_case_update()
+    end
+  end
+
+  @doc """
+  Removes a recorded outcome as entered in error, on behalf of
+  `corrector`, with a required `reason` - for an outcome that should
+  never have been recorded on this case (entered on the wrong patient's
+  case, say), as opposed to one that was simply wrong. The case goes
+  back to having no outcome, so the right one can be recorded afresh.
+
+  Same refusals as `correct_outcome/4`, minus `:unchanged`.
+  """
+  def withdraw_outcome(%Case{} = case_record, reason, %{id: corrector_id, role: role}) do
+    cond do
+      not can_correct_outcomes?(role) ->
+        {:error, :unauthorized}
+
+      is_nil(case_record.outcome) ->
+        {:error, :no_outcome}
+
+      true ->
+        Repo.transact(fn ->
+          with {:ok, _correction} <-
+                 insert_outcome_correction(
+                   case_record,
+                   :entered_in_error,
+                   nil,
+                   reason,
+                   corrector_id
+                 ) do
+            case_record
+            |> Case.outcome_withdrawal_changeset()
+            |> Repo.update()
+          end
+        end)
+        |> broadcast_case_update()
+    end
+  end
+
+  defp insert_outcome_correction(case_record, kind, new_outcome, reason, corrector_id) do
+    %OutcomeCorrection{}
+    |> OutcomeCorrection.changeset(%{
+      kind: kind,
+      previous_outcome: case_record.outcome,
+      new_outcome: new_outcome,
+      reason: reason,
+      case_id: case_record.id,
+      corrected_by_id: corrector_id
+    })
+    |> Repo.insert()
+  end
+
+  # Broadcast only after the transaction has committed, so no listener
+  # can see a change that was then rolled back.
+  defp broadcast_case_update({:ok, %Case{} = case_record}) do
+    broadcast_case({:updated, case_record})
+    {:ok, case_record}
+  end
+
+  defp broadcast_case_update(error), do: error
+
+  @doc """
+  Returns a case's outcome corrections, newest first.
+  """
+  def list_outcome_corrections_for_case(case_id) do
+    Repo.all(
+      from c in OutcomeCorrection,
+        where: c.case_id == ^case_id,
+        order_by: [desc: c.inserted_at]
+    )
+  end
+
+  @doc """
+  Returns the ids of every case whose outcome has been corrected or
+  removed at least once, as a `MapSet` - for marking those cases in the
+  case list.
+  """
+  def list_outcome_corrected_case_ids do
+    from(c in OutcomeCorrection, distinct: true, select: c.case_id)
+    |> Repo.all()
+    |> MapSet.new()
   end
 
   @doc """

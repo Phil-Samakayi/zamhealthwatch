@@ -49,7 +49,8 @@ defmodule ZamHealthWatch.NationalReportingTest do
     test "counts ruled-out reports and deaths separately from the case total" do
       facility = facility_fixture()
       died = case_fixture(%{facility_id: facility.id})
-      {:ok, _} = ZamHealthWatch.CaseManagement.record_outcome(died, :died, :health_worker)
+      recorder = %{id: ZamHealthWatch.AccountsFixtures.user_fixture().id, role: :health_worker}
+      {:ok, _} = ZamHealthWatch.CaseManagement.record_outcome(died, :died, recorder)
       ruled_out = case_fixture(%{facility_id: facility.id})
       ZamHealthWatch.CaseManagement.update_case_status(ruled_out, %{status: :not_a_case})
 

@@ -160,8 +160,8 @@ defmodule ZamHealthWatch.CaseManagementTest do
       recovered = case_fixture()
       died = case_fixture()
       _no_outcome = case_fixture()
-      {:ok, _} = CaseManagement.record_outcome(recovered, :recovered, :health_worker)
-      {:ok, _} = CaseManagement.record_outcome(died, :died, :health_worker)
+      {:ok, _} = CaseManagement.record_outcome(recovered, :recovered, recorder(:health_worker))
+      {:ok, _} = CaseManagement.record_outcome(died, :died, recorder(:health_worker))
 
       assert CaseManagement.count_cases_by_outcome() == %{recovered: 1, died: 1}
     end
@@ -332,9 +332,12 @@ defmodule ZamHealthWatch.CaseManagementTest do
     test "records an outcome and stamps outcome_at" do
       case = case_fixture()
 
-      assert {:ok, updated} = CaseManagement.record_outcome(case, :recovered, :health_worker)
+      recorder = recorder(:health_worker)
+
+      assert {:ok, updated} = CaseManagement.record_outcome(case, :recovered, recorder)
       assert updated.outcome == :recovered
       assert updated.outcome_at != nil
+      assert updated.outcome_recorded_by_id == recorder.id
       assert updated.status == :suspected
     end
 
@@ -342,7 +345,9 @@ defmodule ZamHealthWatch.CaseManagementTest do
       case = case_fixture()
       {:ok, confirmed} = CaseManagement.update_case_status(case, %{status: :confirmed})
 
-      assert {:ok, updated} = CaseManagement.record_outcome(confirmed, :died, :moh_admin)
+      assert {:ok, updated} =
+               CaseManagement.record_outcome(confirmed, :died, recorder(:moh_admin))
+
       assert updated.outcome == :died
       assert updated.status == :confirmed
     end
@@ -350,7 +355,9 @@ defmodule ZamHealthWatch.CaseManagementTest do
     test "rejects a nil role" do
       case = case_fixture()
 
-      assert CaseManagement.record_outcome(case, :recovered, nil) == {:error, :unauthorized}
+      assert CaseManagement.record_outcome(case, :recovered, recorder(nil)) ==
+               {:error, :unauthorized}
+
       assert CaseManagement.get_case!(case.id).outcome == nil
     end
 
@@ -358,15 +365,15 @@ defmodule ZamHealthWatch.CaseManagementTest do
       case = case_fixture()
       {:ok, ruled_out} = CaseManagement.update_case_status(case, %{status: :not_a_case})
 
-      assert CaseManagement.record_outcome(ruled_out, :died, :health_worker) ==
+      assert CaseManagement.record_outcome(ruled_out, :died, recorder(:health_worker)) ==
                {:error, :not_a_case}
     end
 
     test "won't overwrite an outcome that's already recorded" do
       case = case_fixture()
-      {:ok, recovered} = CaseManagement.record_outcome(case, :recovered, :health_worker)
+      {:ok, recovered} = CaseManagement.record_outcome(case, :recovered, recorder(:health_worker))
 
-      assert CaseManagement.record_outcome(recovered, :died, :health_worker) ==
+      assert CaseManagement.record_outcome(recovered, :died, recorder(:health_worker)) ==
                {:error, :outcome_already_recorded}
 
       assert CaseManagement.get_case!(case.id).outcome == :recovered
@@ -375,8 +382,152 @@ defmodule ZamHealthWatch.CaseManagementTest do
     test "rejects a value outside the enum" do
       case = case_fixture()
 
-      assert {:error, changeset} = CaseManagement.record_outcome(case, :closed, :health_worker)
+      assert {:error, changeset} =
+               CaseManagement.record_outcome(case, :closed, recorder(:health_worker))
+
       assert %{outcome: ["is invalid"]} = errors_on(changeset)
+    end
+  end
+
+  describe "correct_outcome/4 and withdraw_outcome/3" do
+    import ZamHealthWatch.CaseManagementFixtures
+
+    alias ZamHealthWatch.CaseManagement.OutcomeCorrection
+
+    @reason "Patient was discharged home alive; death recorded in error."
+
+    setup do
+      recorder = recorder(:health_worker)
+      {:ok, died} = CaseManagement.record_outcome(case_fixture(), :died, recorder)
+      %{died: died, recorder: recorder, officer: recorder(:district_officer)}
+    end
+
+    test "changes the outcome and records what it was, why, and who changed it", %{
+      died: died,
+      recorder: recorder,
+      officer: officer
+    } do
+      CaseManagement.subscribe_cases()
+
+      assert {:ok, corrected} = CaseManagement.correct_outcome(died, :recovered, @reason, officer)
+      assert corrected.outcome == :recovered
+      # The original entry's author and time stay as they were.
+      assert corrected.outcome_recorded_by_id == recorder.id
+      assert corrected.outcome_at == died.outcome_at
+
+      assert [%OutcomeCorrection{} = correction] =
+               CaseManagement.list_outcome_corrections_for_case(died.id)
+
+      assert correction.kind == :corrected
+      assert {correction.previous_outcome, correction.new_outcome} == {:died, :recovered}
+      assert correction.reason == @reason
+      assert correction.corrected_by_id == officer.id
+
+      case_id = died.id
+      assert_receive {:updated, %{id: ^case_id, outcome: :recovered}}
+    end
+
+    test "removes an outcome entered in error, so a new one can be recorded", %{
+      died: died,
+      officer: officer
+    } do
+      assert {:ok, withdrawn} = CaseManagement.withdraw_outcome(died, @reason, officer)
+      assert withdrawn.outcome == nil
+      assert withdrawn.outcome_at == nil
+      assert withdrawn.outcome_recorded_by_id == nil
+
+      assert [
+               %OutcomeCorrection{
+                 kind: :entered_in_error,
+                 previous_outcome: :died,
+                 new_outcome: nil
+               }
+             ] = CaseManagement.list_outcome_corrections_for_case(died.id)
+
+      assert {:ok, %{outcome: :recovered}} =
+               CaseManagement.record_outcome(withdrawn, :recovered, recorder(:health_worker))
+    end
+
+    test "only district officers and MOH admins can correct", %{died: died} do
+      for role <- [:health_worker, :lab_officer, nil] do
+        assert CaseManagement.correct_outcome(died, :recovered, @reason, recorder(role)) ==
+                 {:error, :unauthorized}
+
+        assert CaseManagement.withdraw_outcome(died, @reason, recorder(role)) ==
+                 {:error, :unauthorized}
+      end
+
+      assert {:ok, _} =
+               CaseManagement.correct_outcome(died, :recovered, @reason, recorder(:moh_admin))
+
+      assert CaseManagement.can_correct_outcomes?(:district_officer)
+      refute CaseManagement.can_correct_outcomes?(:health_worker)
+    end
+
+    test "refuses a case with no outcome, and a correction to the same outcome", %{
+      died: died,
+      officer: officer
+    } do
+      assert CaseManagement.correct_outcome(case_fixture(), :died, @reason, officer) ==
+               {:error, :no_outcome}
+
+      assert CaseManagement.withdraw_outcome(case_fixture(), @reason, officer) ==
+               {:error, :no_outcome}
+
+      assert CaseManagement.correct_outcome(died, :died, @reason, officer) == {:error, :unchanged}
+    end
+
+    test "requires a reason of at least 10 characters, and changes nothing without one", %{
+      died: died,
+      officer: officer
+    } do
+      assert {:error, changeset} =
+               CaseManagement.correct_outcome(died, :recovered, " wrong ", officer)
+
+      assert %{reason: [_too_short]} = errors_on(changeset)
+
+      assert {:error, _changeset} = CaseManagement.withdraw_outcome(died, "", officer)
+
+      assert CaseManagement.get_case!(died.id).outcome == :died
+      assert CaseManagement.list_outcome_corrections_for_case(died.id) == []
+    end
+
+    test "rejects an outcome outside the enum, changing nothing", %{died: died, officer: officer} do
+      assert {:error, changeset} = CaseManagement.correct_outcome(died, :closed, @reason, officer)
+      assert %{new_outcome: ["is invalid"]} = errors_on(changeset)
+      assert CaseManagement.get_case!(died.id).outcome == :died
+    end
+
+    test "a correction can be corrected again; the history lists both, newest first", %{
+      died: died,
+      officer: officer
+    } do
+      {:ok, recovered} = CaseManagement.correct_outcome(died, :recovered, @reason, officer)
+
+      {:ok, _died_again} =
+        CaseManagement.correct_outcome(
+          recovered,
+          :died,
+          "Hospital records confirm the patient died on the ward.",
+          officer
+        )
+
+      assert [newest, oldest] = CaseManagement.list_outcome_corrections_for_case(died.id)
+      assert {newest.previous_outcome, newest.new_outcome} == {:recovered, :died}
+      assert {oldest.previous_outcome, oldest.new_outcome} == {:died, :recovered}
+    end
+
+    test "outcome counts and the corrected-case list follow corrections", %{
+      died: died,
+      officer: officer
+    } do
+      assert CaseManagement.count_cases_by_outcome() == %{died: 1}
+      assert CaseManagement.list_outcome_corrected_case_ids() == MapSet.new()
+
+      {:ok, _} = CaseManagement.correct_outcome(died, :recovered, @reason, officer)
+
+      assert CaseManagement.count_cases_by_outcome() == %{recovered: 1}
+      assert CaseManagement.list_outcome_corrected_case_ids() == MapSet.new([died.id])
     end
   end
 
@@ -467,5 +618,11 @@ defmodule ZamHealthWatch.CaseManagementTest do
       case_id = case.id
       refute_receive {:reclassified, %{id: ^case_id}, _}
     end
+  end
+
+  # Who records or corrects an outcome: a real user (the column has a
+  # foreign key) holding `role`.
+  defp recorder(role) do
+    %{id: ZamHealthWatch.AccountsFixtures.user_fixture().id, role: role}
   end
 end

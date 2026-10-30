@@ -123,7 +123,12 @@ defmodule ZamHealthWatch.DemoTest do
       assert statuses[:confirmed] > 0
       assert statuses[:not_a_case] == 1
 
-      assert CaseManagement.count_cases_by_outcome() == %{died: 1, recovered: 2}
+      # Two recoveries, one death, and one death corrected to a recovery.
+      assert CaseManagement.count_cases_by_outcome() == %{died: 1, recovered: 3}
+      assert [corrected_id] = MapSet.to_list(CaseManagement.list_outcome_corrected_case_ids())
+
+      assert [%{previous_outcome: :died, new_outcome: :recovered}] =
+               CaseManagement.list_outcome_corrections_for_case(corrected_id)
     end
 
     test "shapes the facility risk trend: Kabwata elevated, UTH and Monze stable", %{
@@ -208,6 +213,7 @@ defmodule ZamHealthWatch.DemoTest do
       assert deleted["lab_tests"] == 4
       assert deleted["lab_result_corrections"] == 1
       assert deleted["lab_correction_acknowledgements"] == 0
+      assert deleted["case_outcome_corrections"] == 1
       assert deleted["drug_stocks"] == 8
       assert deleted["capacity_reports"] == 4
       assert deleted["vaccination_records"] == 4

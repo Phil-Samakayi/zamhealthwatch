@@ -54,6 +54,7 @@ defmodule ZamHealthWatch.Demo do
   alias ZamHealthWatch.Accounts.User
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
+  alias ZamHealthWatch.CaseManagement.OutcomeCorrection
   alias ZamHealthWatch.DrugAvailability
   alias ZamHealthWatch.DrugAvailability.DrugStock
   alias ZamHealthWatch.Geography
@@ -160,6 +161,7 @@ defmodule ZamHealthWatch.Demo do
     LabCorrectionAcknowledgement,
     LabResultCorrection,
     LabTest,
+    OutcomeCorrection,
     Case,
     DrugStock,
     CapacityReport,
@@ -312,6 +314,7 @@ defmodule ZamHealthWatch.Demo do
     worker = user!("health.worker@example.com")
     officer = user!("district.officer@example.com")
     lab_officer = user!("lab.officer@example.com")
+    admin = user!("moh.admin@example.com")
 
     facility_ids =
       Map.new(~w(KBW UTH NTH MMH), fn code -> {code, facility_id!(code)} end)
@@ -333,7 +336,12 @@ defmodule ZamHealthWatch.Demo do
         backdate!(case_record, now, days_ago)
       end
 
-    seed_case_outcomes!(cases, worker, lab_officer)
+    seed_case_outcomes!(cases, %{
+      worker: worker,
+      officer: officer,
+      lab_officer: lab_officer,
+      admin: admin
+    })
 
     for {code, medicine, qty, reorder} <- @demo_stock do
       {:ok, _stock} =
@@ -382,10 +390,16 @@ defmodule ZamHealthWatch.Demo do
   # ends up :not_a_case, and /labs shows the correction history). All
   # through LabReporting itself, so the case-status effects are the
   # real ones. The oldest confirmed cholera patient died. At UTH, five
-  # malaria cases are confirmed clinically and two of those patients
-  # have recovered - so the case list and dashboards show every
-  # classification and both outcomes.
-  defp seed_case_outcomes!(cases, worker, lab_officer) do
+  # malaria cases are confirmed clinically, two of those patients have
+  # recovered, and a third was recorded as died and then corrected to
+  # recovered - so the case list and dashboards show every
+  # classification, both outcomes, and an outcome correction.
+  defp seed_case_outcomes!(cases, %{
+         worker: worker,
+         officer: officer,
+         lab_officer: lab_officer,
+         admin: admin
+       }) do
     kabwata_cholera =
       Enum.filter(cases, &(&1.disease == :cholera and &1.reported_by_id == worker.id))
 
@@ -422,7 +436,7 @@ defmodule ZamHealthWatch.Demo do
     {:ok, _died} =
       first_lab_case.id
       |> CaseManagement.get_case!()
-      |> CaseManagement.record_outcome(:died, :health_worker)
+      |> CaseManagement.record_outcome(:died, worker)
 
     uth_malaria =
       cases
@@ -438,8 +452,21 @@ defmodule ZamHealthWatch.Demo do
     confirmed
     |> Enum.take(2)
     |> Enum.each(fn case_record ->
-      {:ok, _recovered} = CaseManagement.record_outcome(case_record, :recovered, :district_officer)
+      {:ok, _recovered} = CaseManagement.record_outcome(case_record, :recovered, officer)
     end)
+
+    # Iteration 18: a third UTH patient recorded as died, then corrected
+    # to recovered by the MOH admin - so the case list shows a
+    # "Corrected" marker and the outcome panel a real history.
+    {:ok, wrongly_died} = CaseManagement.record_outcome(Enum.at(confirmed, 2), :died, officer)
+
+    {:ok, _corrected} =
+      CaseManagement.correct_outcome(
+        wrongly_died,
+        :recovered,
+        "Patient was discharged home alive on day 5; the death was recorded in error.",
+        admin
+      )
   end
 
   # Not something CaseManagement exposes on purpose - a real case's
