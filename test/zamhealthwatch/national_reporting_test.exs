@@ -73,6 +73,38 @@ defmodule ZamHealthWatch.NationalReportingTest do
       assert summary.lab_tests_by_status == %{pending: 1, resulted: 1}
     end
 
+    test "counts a corrected result as issued, and a withdrawn one as not" do
+      facility = facility_fixture()
+      case_record = case_fixture(%{facility_id: facility.id})
+
+      lab_officer =
+        ZamHealthWatch.AccountsFixtures.user_fixture()
+        |> ZamHealthWatch.AccountsFixtures.set_role(:lab_officer)
+
+      {:ok, one} =
+        ZamHealthWatch.LabReporting.record_result(
+          lab_test_fixture(%{case_id: case_record.id}),
+          :positive,
+          lab_officer
+        )
+
+      {:ok, _} =
+        ZamHealthWatch.LabReporting.correct_result(one, :negative, "Repeat test negative.", lab_officer)
+
+      {:ok, two} =
+        ZamHealthWatch.LabReporting.record_result(
+          lab_test_fixture(%{case_id: case_record.id}),
+          :positive,
+          lab_officer
+        )
+
+      {:ok, _} =
+        ZamHealthWatch.LabReporting.withdraw_result(two, "Entered on the wrong case.", lab_officer)
+
+      assert [summary] = NationalReporting.facility_summary()
+      assert FacilitySummary.issued_lab_results(summary) == 1
+    end
+
     test "counts drug stock records and flags shortages" do
       facility = facility_fixture()
       drug_stock_fixture(%{facility_id: facility.id, quantity_on_hand: 10, reorder_level: 50})

@@ -64,4 +64,13 @@ defmodule ZamHealthWatch.NationalReporting.FacilitySummary do
   def case_total(%__MODULE__{cases_by_status: by_status}) do
     Map.get(by_status, :suspected, 0) + Map.get(by_status, :confirmed, 0)
   end
+
+  @doc """
+  The facility's issued lab results: resulted plus corrected (Iteration
+  15). A corrected result is still a result the lab stands behind; a
+  withdrawn (`:entered_in_error`) one isn't counted.
+  """
+  def issued_lab_results(%__MODULE__{lab_tests_by_status: by_status}) do
+    Map.get(by_status, :resulted, 0) + Map.get(by_status, :corrected, 0)
+  end
 end

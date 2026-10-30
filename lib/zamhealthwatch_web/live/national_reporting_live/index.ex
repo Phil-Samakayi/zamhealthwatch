@@ -48,7 +48,7 @@ defmodule ZamHealthWatchWeb.NationalReportingLive.Index do
         <:col :let={s} label="District">{s.district_name}</:col>
         <:col :let={s} label="Cases">{case_counts_label(s)}</:col>
         <:col :let={s} label="Deaths">{Map.get(s.cases_by_outcome, :died, 0)}</:col>
-        <:col :let={s} label="Lab tests">{lab_test_counts_label(s.lab_tests_by_status)}</:col>
+        <:col :let={s} label="Lab tests">{lab_test_counts_label(s)}</:col>
         <:col :let={s} label="Drug stock">{drug_stock_label(s)}</:col>
         <:col :let={s} label="Hospital capacity">
           <span class={["badge", capacity_badge_class(s.risk)]}>{capacity_label(s.risk)}</span>
@@ -133,9 +133,9 @@ defmodule ZamHealthWatchWeb.NationalReportingLive.Index do
       "#{Map.get(by_status, :not_a_case, 0)} ruled out"
   end
 
-  defp lab_test_counts_label(lab_tests_by_status) do
-    "#{Map.get(lab_tests_by_status, :pending, 0)} pending · " <>
-      "#{Map.get(lab_tests_by_status, :resulted, 0)} resulted"
+  defp lab_test_counts_label(%FacilitySummary{lab_tests_by_status: by_status} = summary) do
+    "#{Map.get(by_status, :pending, 0)} pending · " <>
+      "#{FacilitySummary.issued_lab_results(summary)} resulted"
   end
 
   defp drug_stock_label(%{drug_stock_count: count, drug_shortage_count: shortages}) do

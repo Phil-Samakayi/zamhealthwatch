@@ -179,7 +179,7 @@ defmodule ZamHealthWatch.NationalReporting do
       Map.get(summary.cases_by_status, :not_a_case, 0),
       Map.get(summary.cases_by_outcome, :died, 0),
       Map.get(summary.lab_tests_by_status, :pending, 0),
-      Map.get(summary.lab_tests_by_status, :resulted, 0),
+      FacilitySummary.issued_lab_results(summary),
       summary.drug_stock_count,
       summary.drug_shortage_count,
       risk_label(summary.risk, :capacity_status),
