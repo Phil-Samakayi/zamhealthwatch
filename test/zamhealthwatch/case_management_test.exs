@@ -401,4 +401,36 @@ defmodule ZamHealthWatch.CaseManagementTest do
       assert restored.status == :confirmed
     end
   end
+
+  describe "reclassification broadcasts" do
+    import ZamHealthWatch.CaseManagementFixtures
+
+    test "broadcast the previous status when a lab verdict changes the classification" do
+      case = case_fixture()
+      CaseManagement.subscribe_reclassifications()
+
+      {:ok, updated} = CaseManagement.apply_lab_verdict(case, :negative)
+
+      assert_receive {:reclassified, ^updated, :suspected}
+    end
+
+    test "broadcast when a person confirms a case" do
+      case = case_fixture()
+      CaseManagement.subscribe_reclassifications()
+
+      {:ok, confirmed} = CaseManagement.advance_case_status(case, :health_worker)
+
+      assert_receive {:reclassified, ^confirmed, :suspected}
+    end
+
+    test "aren't sent when the classification doesn't change" do
+      case = case_fixture()
+      CaseManagement.subscribe_reclassifications()
+
+      {:ok, _same} = CaseManagement.update_case_status(case, %{status: :suspected})
+
+      case_id = case.id
+      refute_receive {:reclassified, %{id: ^case_id}, _}
+    end
+  end
 end

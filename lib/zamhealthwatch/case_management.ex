@@ -47,6 +47,35 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
+  Subscribes to notifications about a case's classification changing.
+
+  The broadcasted messages match the pattern:
+
+    * {:reclassified, %Case{}, previous_status}
+
+  Sent whenever `status` actually changes - by a person confirming a
+  case, or by a lab result being entered, corrected, or withdrawn - and
+  never when it stays the same. Its own topic, separate from `"cases"`,
+  on purpose (Iteration 15): every LiveView on `"cases"` pattern-matches
+  `{:created, _}`/`{:updated, _}` only, and a new message shape there
+  would crash each of them. Only something that cares about the
+  *transition* (Public Alerts' "ruled out" follow-up) subscribes here.
+  """
+  def subscribe_reclassifications do
+    Phoenix.PubSub.subscribe(ZamHealthWatch.PubSub, "case_reclassifications")
+  end
+
+  defp broadcast_reclassification(%Case{status: status}, status), do: :ok
+
+  defp broadcast_reclassification(%Case{} = case_record, previous_status) do
+    Phoenix.PubSub.broadcast(
+      ZamHealthWatch.PubSub,
+      "case_reclassifications",
+      {:reclassified, case_record, previous_status}
+    )
+  end
+
+  @doc """
   Returns the list of cases, most recently reported first.
 
   Ordered for the live case list (`CaseLive.Index`) - a plain `Repo.all/1`
@@ -155,13 +184,14 @@ defmodule ZamHealthWatch.CaseManagement do
       {:error, %Ecto.Changeset{}}
 
   """
-  def update_case_status(%Case{} = case, attrs) do
-    with {:ok, case = %Case{}} <-
-           case
+  def update_case_status(%Case{} = case_record, attrs) do
+    with {:ok, updated = %Case{}} <-
+           case_record
            |> Case.status_changeset(attrs)
            |> Repo.update() do
-      broadcast_case({:updated, case})
-      {:ok, case}
+      broadcast_case({:updated, updated})
+      broadcast_reclassification(updated, case_record.status)
+      {:ok, updated}
     end
   end
 
@@ -245,13 +275,14 @@ defmodule ZamHealthWatch.CaseManagement do
   # The only manual transition (`:suspected` -> `:confirmed`) also
   # records *that* a person confirmed it, so the confirmation survives
   # later lab-driven recalculation - see classification_for/2.
-  defp confirm_clinically(%Case{} = case) do
-    with {:ok, case = %Case{}} <-
-           case
+  defp confirm_clinically(%Case{} = case_record) do
+    with {:ok, updated = %Case{}} <-
+           case_record
            |> Case.clinical_confirmation_changeset()
            |> Repo.update() do
-      broadcast_case({:updated, case})
-      {:ok, case}
+      broadcast_case({:updated, updated})
+      broadcast_reclassification(updated, case_record.status)
+      {:ok, updated}
     end
   end
 
