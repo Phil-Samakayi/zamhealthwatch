@@ -771,3 +771,26 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 **Status:** 559 tests, 0 failures, first run. Migration applied cleanly. Closed. With this slice, Iteration 15 is complete: corrections that keep the original result, require a reason, recalculate the case's classification, and tell the people affected.
 
 ---
+
+## Iteration 16 — Demo reset on boot
+
+**Goal:** keep the public demo fresh. Two problems showed up once the demo had been live for a while. The live database was seeded before Iteration 15, and `seed_activity!/1` only seeds an empty database, so the demo correction (and its notice for the health worker) never appeared on the live site. And the risk trend is dated relative to when the data was seeded, so about four weeks later every facility drifts to "No data". Both are the Iteration 14 follow-up "re-date the demo cases", plus the Iteration 15 known limitation that a notice marked as seen is gone for every later visitor.
+
+**Decisions:**
+
+- **Wipe and reseed on every boot, rather than re-dating the existing rows.** Re-dating would fix the trend but not the rest: a visitor who rules out a case, records a death, or marks the correction notice as seen leaves the demo that way for everyone after them. Reseeding from scratch fixes both, and it reuses `seed_activity!/1` unchanged. Render's free instance restarts whenever it has been idle for 15 minutes, so in practice each visitor after a quiet spell gets the same fresh demo, dated from that moment. The trade-off accepted: anything a visitor changes is gone at the next restart. For a shared public demo that is the intended behaviour, and the home page says so.
+- **Opt-in, off by default.** `DEMO_RESET_ON_BOOT=true` turns it on (read in `config/runtime.exs`, exposed as `Demo.reset_on_boot?/0`). Without it, nothing is ever wiped, so a developer's database and any deployment with real data are safe. `reset_activity!/0` itself is unconditional; the check lives in `priv/repo/seeds.exs`, the one caller, and the tests call the function directly.
+- **What gets wiped:** cases, lab tests, corrections and acknowledgements, drug stock, capacity reports, vaccination records, and alert subscribers, deleted children-first so the `:restrict` foreign keys hold, in one transaction so a failure leaves everything as it was. Alert subscribers are included because on a public demo they're visitors' phone numbers, which shouldn't outlive the demo session. Alert jobs that haven't run yet are deleted too, since a job for a case that no longer exists would fail on every retry. **Kept:** user accounts (the demo accounts are reset separately by `ensure_accounts!/0`), districts, and facilities.
+- **Lives in `Demo`, not in the contexts.** A "delete everything" function on `CaseManagement`, `LabReporting`, and the rest would be a dangerous public API that only a demo needs. `Demo` already used `Repo` directly for two seeding-only jobs (backdating cases, setting demo passwords); this is the third, documented the same way.
+- **No second safety check,** such as refusing to reset when non-demo users exist. Visitors can register accounts on the demo, and the demo MOH admin can give them roles, so any such check would block the reset on the one deployment that needs it. The explicit, clearly named environment variable is the guard.
+
+**Built:**
+
+- [x] `Demo.reset_on_boot?/0`, `Demo.reset_activity!/0`; `priv/repo/seeds.exs` resets before seeding when the flag is on.
+- [x] `config/runtime.exs` reads `DEMO_RESET_ON_BOOT`; `render.yaml` sets it for the demo service.
+- [x] Home page notice (`#demo-reset-notice`) when the deployment resets on boot. README deployment section.
+- [x] Tests: `DemoTest` (every kind of activity cleared; accounts, districts, and facilities kept; per-table counts returned; waiting alert jobs removed; reset plus seed brings back a correction notice that had been marked as seen; flag off unless configured), `PageControllerTest` (notice shown only when the flag is on).
+
+**Status:** pending `mix test` verification. Then set `DEMO_RESET_ON_BOOT=true` on the Render service and confirm the correction notice appears for the demo health worker.
+
+---

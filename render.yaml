@@ -27,3 +27,9 @@ services:
         value: "true"
       - key: POOL_SIZE
         value: "5"
+      # Public demo only (Iteration 16): wipe and reseed the demo data on
+      # every boot, so each visitor after an idle spell starts from the
+      # same fresh, correctly dated demo. Never set this on a deployment
+      # holding real data.
+      - key: DEMO_RESET_ON_BOOT
+        value: "true"

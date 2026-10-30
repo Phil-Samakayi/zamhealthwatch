@@ -42,7 +42,7 @@ Port 4000 is what Phoenix will use once there's an app to run; Postgres listens 
 
 ## Status
 
-All twelve modules have a working first slice (Iterations 0–13), and Iteration 14 deploys the app as a public demo. See [`docs/ITERATIONS.md`](docs/ITERATIONS.md) for the detail and the deferred follow-ups.
+All twelve modules have a working first slice (Iterations 0–13), Iteration 14 deploys the app as a public demo, Iteration 15 adds lab result corrections, and Iteration 16 resets the demo data on boot. See [`docs/ITERATIONS.md`](docs/ITERATIONS.md) for the detail and the deferred follow-ups.
 
 ## Deployment
 
@@ -52,8 +52,9 @@ The demo runs on **Render** (free web service, Docker) with **Neon** (free Postg
 - `render.yaml` is a Render Blueprint for the web service. The secrets (`DATABASE_URL`, `SECRET_KEY_BASE`) are entered in the Render dashboard, never committed.
 - Nobody can log in by email on the demo because no mail provider is connected. Instead, `ZamHealthWatch.Demo` seeds one password-login account per role, and the home page lists their credentials. Outgoing emails are written to the server log.
 - On the free plan the service sleeps after 15 minutes without traffic, so the first visit after that takes about a minute to wake it.
+- With `DEMO_RESET_ON_BOOT=true`, every boot also wipes the demo activity (cases, lab tests, stock, capacity, coverage, alert subscribers) and reseeds it dated from that moment. Each visitor after an idle spell gets the same fresh demo, and the risk trend stays current because the free instance restarts whenever it has been idle. Accounts, districts, and facilities are kept. Never set it on a database holding real data.
 
-Required environment variables: `DATABASE_URL` (Neon's direct connection string, not the `-pooler` one), `SECRET_KEY_BASE` (from `mix phx.gen.secret`), and `DATABASE_SSL=true`. Africa's Talking credentials (`AFRICAS_TALKING_USERNAME`, `AFRICAS_TALKING_API_KEY`) are optional; without them SMS is only logged.
+Required environment variables: `DATABASE_URL` (Neon's direct connection string, not the `-pooler` one), `SECRET_KEY_BASE` (from `mix phx.gen.secret`), and `DATABASE_SSL=true`. The public demo also sets `DEMO_RESET_ON_BOOT=true`. Africa's Talking credentials (`AFRICAS_TALKING_USERNAME`, `AFRICAS_TALKING_API_KEY`) are optional; without them SMS is only logged.
 
 ## Docs
 
