@@ -119,72 +119,96 @@ defmodule ZamHealthWatch.LabReportingTest do
   end
 
   describe "record_result/3" do
-    test "a positive result confirms the linked case" do
+    setup do
+      %{lab_officer: user_fixture() |> set_role(:lab_officer)}
+    end
+
+    test "a positive result confirms the linked case and records who entered it", %{
+      lab_officer: lab_officer
+    } do
       case_record = case_fixture()
       lab_test = lab_test_fixture(%{case_id: case_record.id})
 
-      assert {:ok, updated} = LabReporting.record_result(lab_test, :positive, :health_worker)
+      assert {:ok, updated} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
       assert updated.status == :resulted
       assert updated.result == :positive
       assert updated.resulted_at != nil
+      assert updated.resulted_by_id == lab_officer.id
       assert CaseManagement.get_case!(case_record.id).status == :confirmed
     end
 
-    test "a negative result rules the linked case out (not a case)" do
+    test "a negative result rules the linked case out (not a case)", %{lab_officer: lab_officer} do
       case_record = case_fixture()
       lab_test = lab_test_fixture(%{case_id: case_record.id})
 
-      assert {:ok, updated} = LabReporting.record_result(lab_test, :negative, :district_officer)
+      assert {:ok, updated} = LabReporting.record_result(lab_test, :negative, lab_officer)
 
       assert updated.result == :negative
       assert CaseManagement.get_case!(case_record.id).status == :not_a_case
     end
 
-    test "an inconclusive result leaves the linked case's status unchanged" do
+    test "an inconclusive result leaves the linked case's status unchanged", %{
+      lab_officer: lab_officer
+    } do
       case_record = case_fixture()
       lab_test = lab_test_fixture(%{case_id: case_record.id})
 
-      assert {:ok, updated} = LabReporting.record_result(lab_test, :inconclusive, :moh_admin)
+      assert {:ok, updated} = LabReporting.record_result(lab_test, :inconclusive, lab_officer)
 
       assert updated.result == :inconclusive
       assert CaseManagement.get_case!(case_record.id).status == :suspected
     end
 
-    test "a positive result reclassifies a case an earlier result ruled out" do
+    test "a positive result reclassifies a case an earlier result ruled out", %{
+      lab_officer: lab_officer
+    } do
       case_record = case_fixture()
       {:ok, case_record} = CaseManagement.update_case_status(case_record, %{status: :not_a_case})
       lab_test = lab_test_fixture(%{case_id: case_record.id})
 
-      assert {:ok, _updated} = LabReporting.record_result(lab_test, :positive, :health_worker)
+      assert {:ok, _updated} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
       assert CaseManagement.get_case!(case_record.id).status == :confirmed
     end
 
-    test "rejects a nil role" do
-      lab_test = lab_test_fixture()
+    test "rejects every role except lab officer" do
+      for role <- [nil, :health_worker, :district_officer, :moh_admin] do
+        lab_test = lab_test_fixture()
+        user = if role, do: user_fixture() |> set_role(role), else: user_fixture()
 
-      assert LabReporting.record_result(lab_test, :positive, nil) == {:error, :unauthorized}
-      assert LabReporting.get_lab_test!(lab_test.id).status == :pending
+        assert LabReporting.record_result(lab_test, :positive, user) == {:error, :unauthorized}
+        assert LabReporting.get_lab_test!(lab_test.id).status == :pending
+      end
     end
 
-    test "rejects re-recording a result for an already-resulted test" do
+    test "rejects re-recording a result for an already-resulted test", %{lab_officer: lab_officer} do
       lab_test = lab_test_fixture()
-      {:ok, resulted} = LabReporting.record_result(lab_test, :positive, :health_worker)
+      {:ok, resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
-      assert LabReporting.record_result(resulted, :negative, :health_worker) ==
+      assert LabReporting.record_result(resulted, :negative, lab_officer) ==
                {:error, :already_resulted}
 
       assert LabReporting.get_lab_test!(lab_test.id).result == :positive
     end
 
-    test "broadcasts the updated lab test" do
+    test "broadcasts the updated lab test", %{lab_officer: lab_officer} do
       lab_test = lab_test_fixture()
       LabReporting.subscribe_lab_tests()
 
-      {:ok, updated} = LabReporting.record_result(lab_test, :positive, :health_worker)
+      {:ok, updated} = LabReporting.record_result(lab_test, :positive, lab_officer)
 
       assert_receive {:updated, ^updated}
+    end
+  end
+
+  describe "can_record_results?/1" do
+    test "is true only for lab officers" do
+      assert LabReporting.can_record_results?(:lab_officer)
+      refute LabReporting.can_record_results?(:moh_admin)
+      refute LabReporting.can_record_results?(:district_officer)
+      refute LabReporting.can_record_results?(:health_worker)
+      refute LabReporting.can_record_results?(nil)
     end
   end
 end

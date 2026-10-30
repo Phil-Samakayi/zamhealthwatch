@@ -147,22 +147,50 @@ defmodule ZamHealthWatch.LabReporting do
     LabTest.request_changeset(lab_test, attrs)
   end
 
+  @result_recording_roles [:lab_officer]
+
   @doc """
-  Records a result for a pending lab test on behalf of a user holding
-  `role`, and applies its consequence to the linked case.
+  Returns `true` if a user holding `role` may enter lab results.
 
-  Same two-check shape `CaseManagement.advance_case_status/2` already
-  established for a role-gated action, applied here because recording a
-  result can change a case's status exactly the way clicking
-  Confirm on the case list already can - leaving that path
-  ungated while the button is gated would be a real, if narrow, hole:
+  Only `:lab_officer` (Iteration 15). In a real lab, results are entered
+  by lab staff, and the clinicians and officers who use them don't
+  enter or change them. Before this, any assigned role could record a
+  result - including the district officer who'd act on it. Exposed so
+  `LabLive.Index` can decide whether to show the result buttons by
+  asking the same rule `record_result/3` enforces, rather than keeping
+  its own copy.
 
-    * `role` must be assigned (not `nil`) - the same "any of the three
-      roles qualifies, no finer distinction has a real use case yet"
-      call `advance_case_status/2` already made.
+  ## Examples
+
+      iex> can_record_results?(:lab_officer)
+      true
+
+      iex> can_record_results?(:district_officer)
+      false
+
+  """
+  def can_record_results?(role), do: role in @result_recording_roles
+
+  @doc """
+  Records a result for a pending lab test on behalf of `recorder` - any
+  map with the recording user's `:id` and `:role`, such as
+  `current_scope.user` - and applies its consequence to the linked case.
+
+  Takes the id and role rather than an `%Accounts.User{}` pattern, the
+  same decoupling from `Accounts`'s schema `CaseManagement.advance_case_status/2`
+  keeps. Two checks happen here, not only in `LabLive.Index`'s
+  rendering, so a forged event can't skip either one:
+
+    * the recorder must be allowed to enter results - see
+      `can_record_results?/1`.
     * the test must still be `:pending` - a `:resulted` test is a
       terminal state; re-recording would silently overwrite an existing
       result and could re-trigger its case side effect a second time.
+      Fixing a wrong result is a correction, with its own history - not
+      an overwrite.
+
+  The recorder's id is stored as `resulted_by_id`, so every new result
+  says who entered it.
 
   What a result does to the linked case (Information Expert: this
   context, not `CaseManagement`, knows what a lab result *means* for
@@ -190,19 +218,19 @@ defmodule ZamHealthWatch.LabReporting do
 
   ## Examples
 
-      iex> record_result(lab_test, :positive, :health_worker)
+      iex> record_result(lab_test, :positive, %{id: lab_officer_id, role: :lab_officer})
       {:ok, %LabTest{}}
 
-      iex> record_result(lab_test, :positive, nil)
+      iex> record_result(lab_test, :positive, %{id: worker_id, role: :health_worker})
       {:error, :unauthorized}
 
-      iex> record_result(%LabTest{status: :resulted}, :positive, :health_worker)
+      iex> record_result(%LabTest{status: :resulted}, :positive, lab_officer)
       {:error, :already_resulted}
 
   """
-  def record_result(%LabTest{} = lab_test, result, role) do
+  def record_result(%LabTest{} = lab_test, result, %{id: recorder_id, role: role}) do
     cond do
-      is_nil(role) ->
+      not can_record_results?(role) ->
         {:error, :unauthorized}
 
       lab_test.status == :resulted ->
@@ -211,7 +239,7 @@ defmodule ZamHealthWatch.LabReporting do
       true ->
         with {:ok, updated} <-
                lab_test
-               |> LabTest.result_changeset(%{result: result})
+               |> LabTest.result_changeset(%{result: result, resulted_by_id: recorder_id})
                |> Repo.update() do
           broadcast_lab_test({:updated, updated})
           apply_result_to_case(updated)

@@ -10,6 +10,9 @@ defmodule ZamHealthWatch.LabReporting.LabTest do
     field :resulted_at, :utc_datetime
     field :case_id, :binary_id
     field :requested_by_id, :binary_id
+    # Who entered the result (Iteration 15). `nil` on results entered
+    # before attribution existed - see the add_resulted_by migration.
+    field :resulted_by_id, :binary_id
 
     timestamps(type: :utc_datetime)
   end
@@ -44,11 +47,16 @@ defmodule ZamHealthWatch.LabReporting.LabTest do
   in-progress" state (see `LabReporting`'s module doc for why two
   states, not three, is this slice's cut), so entering a result is the
   only way a test ever leaves `:pending`.
+
+  `resulted_by_id` is required: since Iteration 15 every new result
+  records who entered it, the same audit rule `requested_by_id` already
+  follows, checked against `Accounts.User` via `foreign_key_constraint/2`.
   """
   def result_changeset(lab_test, attrs) do
     lab_test
-    |> cast(attrs, [:result])
-    |> validate_required([:result])
+    |> cast(attrs, [:result, :resulted_by_id])
+    |> validate_required([:result, :resulted_by_id])
+    |> foreign_key_constraint(:resulted_by_id)
     |> put_change(:status, :resulted)
     |> put_change(:resulted_at, DateTime.utc_now(:second))
   end
