@@ -132,6 +132,50 @@ defmodule ZamHealthWatch.CaseManagementTest do
       assert CaseManagement.count_cases() == 2
     end
 
+    test "count_cases/0 and the other totals exclude cases ruled out as not a case" do
+      facility = facility_fixture()
+      case_fixture(%{disease: :cholera, facility_id: facility.id})
+      ruled_out = case_fixture(%{disease: :cholera, facility_id: facility.id})
+      {:ok, _} = CaseManagement.update_case_status(ruled_out, %{status: :not_a_case})
+
+      assert CaseManagement.count_cases() == 1
+      assert CaseManagement.count_cases_by_disease() == %{cholera: 1}
+      assert CaseManagement.count_cases_by_facility() == %{facility.id => 1}
+
+      assert CaseManagement.count_cases_by_facility_between(
+               DateTime.add(DateTime.utc_now(), -3600, :second),
+               DateTime.add(DateTime.utc_now(), 3600, :second)
+             ) == %{facility.id => 1}
+    end
+
+    test "count_cases_by_status/0 still reports ruled-out cases under :not_a_case" do
+      case_fixture()
+      ruled_out = case_fixture()
+      {:ok, _} = CaseManagement.update_case_status(ruled_out, %{status: :not_a_case})
+
+      assert CaseManagement.count_cases_by_status() == %{suspected: 1, not_a_case: 1}
+    end
+
+    test "count_cases_by_outcome/0 counts recorded outcomes, omitting cases with none" do
+      recovered = case_fixture()
+      died = case_fixture()
+      _no_outcome = case_fixture()
+      {:ok, _} = CaseManagement.record_outcome(recovered, :recovered, :health_worker)
+      {:ok, _} = CaseManagement.record_outcome(died, :died, :health_worker)
+
+      assert CaseManagement.count_cases_by_outcome() == %{recovered: 1, died: 1}
+    end
+
+    test "any_cases?/0 is true even when every case was ruled out" do
+      refute CaseManagement.any_cases?()
+
+      ruled_out = case_fixture()
+      {:ok, _} = CaseManagement.update_case_status(ruled_out, %{status: :not_a_case})
+
+      assert CaseManagement.any_cases?()
+      assert CaseManagement.count_cases() == 0
+    end
+
     test "count_cases_by_disease/0 groups counts by disease, omitting diseases with none" do
       case_fixture(%{disease: :cholera})
       case_fixture(%{disease: :cholera})
@@ -207,12 +251,12 @@ defmodule ZamHealthWatch.CaseManagementTest do
       assert CaseManagement.next_status(:suspected) == :confirmed
     end
 
-    test "next_status/1 moves :confirmed to :resolved" do
-      assert CaseManagement.next_status(:confirmed) == :resolved
+    test "next_status/1 has no manual step after :confirmed" do
+      assert CaseManagement.next_status(:confirmed) == nil
     end
 
-    test "next_status/1 has nothing after :resolved" do
-      assert CaseManagement.next_status(:resolved) == nil
+    test "next_status/1 has no manual step from :not_a_case" do
+      assert CaseManagement.next_status(:not_a_case) == nil
     end
 
     test "advance_case_status/2 moves a :suspected case to :confirmed when a role is assigned" do
@@ -220,16 +264,6 @@ defmodule ZamHealthWatch.CaseManagementTest do
 
       assert {:ok, updated_case} = CaseManagement.advance_case_status(case, :health_worker)
       assert updated_case.status == :confirmed
-    end
-
-    test "advance_case_status/2 moves a :confirmed case to :resolved when a role is assigned" do
-      case = case_fixture()
-      {:ok, confirmed_case} = CaseManagement.update_case_status(case, %{status: :confirmed})
-
-      assert {:ok, updated_case} =
-               CaseManagement.advance_case_status(confirmed_case, :moh_admin)
-
-      assert updated_case.status == :resolved
     end
 
     test "advance_case_status/2 rejects a nil role" do
@@ -241,10 +275,64 @@ defmodule ZamHealthWatch.CaseManagementTest do
 
     test "advance_case_status/2 rejects a case with no next status, regardless of role" do
       case = case_fixture()
-      {:ok, resolved_case} = CaseManagement.update_case_status(case, %{status: :resolved})
+      {:ok, confirmed_case} = CaseManagement.update_case_status(case, %{status: :confirmed})
 
-      assert CaseManagement.advance_case_status(resolved_case, :district_officer) ==
+      assert CaseManagement.advance_case_status(confirmed_case, :district_officer) ==
                {:error, :no_next_status}
+    end
+  end
+
+  describe "record_outcome/3" do
+    import ZamHealthWatch.CaseManagementFixtures
+
+    test "records an outcome and stamps outcome_at" do
+      case = case_fixture()
+
+      assert {:ok, updated} = CaseManagement.record_outcome(case, :recovered, :health_worker)
+      assert updated.outcome == :recovered
+      assert updated.outcome_at != nil
+      assert updated.status == :suspected
+    end
+
+    test "works on a confirmed case without changing its classification" do
+      case = case_fixture()
+      {:ok, confirmed} = CaseManagement.update_case_status(case, %{status: :confirmed})
+
+      assert {:ok, updated} = CaseManagement.record_outcome(confirmed, :died, :moh_admin)
+      assert updated.outcome == :died
+      assert updated.status == :confirmed
+    end
+
+    test "rejects a nil role" do
+      case = case_fixture()
+
+      assert CaseManagement.record_outcome(case, :recovered, nil) == {:error, :unauthorized}
+      assert CaseManagement.get_case!(case.id).outcome == nil
+    end
+
+    test "rejects a case ruled out as not a case" do
+      case = case_fixture()
+      {:ok, ruled_out} = CaseManagement.update_case_status(case, %{status: :not_a_case})
+
+      assert CaseManagement.record_outcome(ruled_out, :died, :health_worker) ==
+               {:error, :not_a_case}
+    end
+
+    test "won't overwrite an outcome that's already recorded" do
+      case = case_fixture()
+      {:ok, recovered} = CaseManagement.record_outcome(case, :recovered, :health_worker)
+
+      assert CaseManagement.record_outcome(recovered, :died, :health_worker) ==
+               {:error, :outcome_already_recorded}
+
+      assert CaseManagement.get_case!(case.id).outcome == :recovered
+    end
+
+    test "rejects a value outside the enum" do
+      case = case_fixture()
+
+      assert {:error, changeset} = CaseManagement.record_outcome(case, :closed, :health_worker)
+      assert %{outcome: ["is invalid"]} = errors_on(changeset)
     end
   end
 end

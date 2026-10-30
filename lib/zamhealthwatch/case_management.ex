@@ -3,14 +3,25 @@ defmodule ZamHealthWatch.CaseManagement do
   The CaseManagement context.
 
   Owns the individual case record - who reported it, at which facility,
-  for which disease, and where it sits in its `:suspected` -> `:confirmed`
-  -> `:resolved` lifecycle (per the brief's "Case Management" module).
+  for which disease, its classification (`:suspected`, `:confirmed`, or
+  `:not_a_case`), and the patient's outcome (`:recovered` or `:died`)
+  once one is known (per the brief's "Case Management" module).
   Aggregate views (case counts by district, trends over time - the
   brief's "Disease Surveillance" module) are queries over this same
   `cases` table, not a separate schema, so for now they live here too
   rather than in a still-empty context split off before there's
   anything distinct to split. Revisit if/when aggregation logic grows
   enough to justify its own boundary.
+
+  **Which cases count.** Since Iteration 15, every aggregate below
+  except `count_cases_by_status/0` excludes `:not_a_case` - a case ruled
+  out by a negative lab result was never a case, so it doesn't belong
+  in a disease total, a facility's case count, a map marker, or a risk
+  trend. That's the standard surveillance counting rule (suspected plus
+  confirmed). `count_cases_by_status/0` still counts every
+  classification, so a dashboard can show how many were ruled out.
+  `list_cases/0` and `list_cases_by_facility/1` still return every
+  record - the case list is a register of reports, not a total.
   """
 
   import Ecto.Query, warn: false
@@ -40,7 +51,8 @@ defmodule ZamHealthWatch.CaseManagement do
 
   Ordered for the live case list (`CaseLive.Index`) - a plain `Repo.all/1`
   has no defined order, and binary_id primary keys don't happen to sort
-  chronologically, so newest-first has to be explicit.
+  chronologically, so newest-first has to be explicit. Includes
+  `:not_a_case` records (see the moduledoc).
 
   ## Examples
 
@@ -91,7 +103,7 @@ defmodule ZamHealthWatch.CaseManagement do
   @doc """
   Reports a new case.
 
-  Always starts `:suspected` - see `Case.changeset/2`.
+  Always starts `:suspected` with no outcome - see `Case.changeset/2`.
 
   ## Examples
 
@@ -126,7 +138,13 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Moves a case through its lifecycle (`:suspected` -> `:confirmed` -> `:resolved`).
+  Sets a case's classification (`:suspected`, `:confirmed`, or
+  `:not_a_case`).
+
+  The unrestricted primitive - any valid value, from any current one.
+  `LabReporting` uses it to apply what a result means, and a result can
+  move a case in any direction. A *person's* manual change goes through
+  `advance_case_status/2`, which only allows confirming a suspected case.
 
   ## Examples
 
@@ -161,54 +179,48 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Returns the status a case would move to next in its one-directional
-  lifecycle (`:suspected` -> `:confirmed` -> `:resolved`), or `nil` once
-  `:resolved` - there's nowhere further to advance to.
+  Returns the classification a person may move a case to by hand, or
+  `nil` if there's none.
 
-  `update_case_status/2` itself still allows setting *any* valid status
-  regardless of the current one (Iteration 1 deliberately left that
-  permissive at the data layer - see `Case.status_changeset/2` - since
-  there was no case-management screen yet to make a stricter rule
-  meaningful). Now that `CaseLive.Index` has one, this is that rule,
-  layered on top rather than tightened in the changeset itself, so a
-  future consumer that legitimately needs an arbitrary status set isn't
-  blocked by it.
+  Only `:suspected` -> `:confirmed`: confirming a case on clinical or
+  epidemiological grounds (a patient linked to a known cluster, say) is
+  something a health worker legitimately does without waiting for a lab.
+  Ruling a case *out* is the lab's call, made through a negative result
+  (see `LabReporting.record_result/3`), so there's no manual path to
+  `:not_a_case`. Since Iteration 15 a confirmed case no longer has a
+  manual next step either - "Resolve" used to be one, but closing a
+  case is now recording its outcome (`record_outcome/3`), which isn't a
+  classification at all.
 
   ## Examples
 
       iex> next_status(:suspected)
       :confirmed
 
-      iex> next_status(:resolved)
+      iex> next_status(:confirmed)
       nil
 
   """
   def next_status(:suspected), do: :confirmed
-  def next_status(:confirmed), do: :resolved
-  def next_status(:resolved), do: nil
+  def next_status(:confirmed), do: nil
+  def next_status(:not_a_case), do: nil
 
   @doc """
-  Advances a case to its next lifecycle status on behalf of a user
-  holding `role`.
+  Moves a case to its next classification (see `next_status/1`) on
+  behalf of a user holding `role`.
 
   Two checks happen here, not only in `CaseLive.Index`'s rendering - a
   forged event can't skip either one, the same server-side-enforcement
   precedent `with_reporter/2` already set for `reported_by_id`:
 
-    * `role` must be assigned (not `nil`) - any of `Accounts.User`'s
-      three roles qualifies. This slice doesn't yet distinguish *which*
-      role may do what (e.g. only `:moh_admin` resolving a case) - no
-      real use case has decided that yet, so it isn't guessed at here,
-      same reasoning this project has applied to every other
-      not-yet-needed distinction. Revisit once one exists.
-    * the case must actually have a next status (see `next_status/1`) -
-      a `:resolved` case is a terminal state.
+    * `role` must be assigned (not `nil`) - any of the assigned roles
+      qualifies.
+    * the case must actually have a next classification.
 
   Takes a plain `role` atom (or `nil`), not an `%Accounts.User{}` struct -
   `CaseManagement` stays decoupled from `Accounts`'s schema the same way
   it already is from `Geography.Facility`'s, so the caller (`CaseLive.Index`,
-  via `current_scope.user.role`) is what bridges the two contexts, not
-  this one reaching into the other's data directly.
+  via `current_scope.user.role`) is what bridges the two contexts.
 
   ## Examples
 
@@ -218,7 +230,7 @@ defmodule ZamHealthWatch.CaseManagement do
       iex> advance_case_status(case, nil)
       {:error, :unauthorized}
 
-      iex> advance_case_status(%Case{status: :resolved}, :health_worker)
+      iex> advance_case_status(%Case{status: :confirmed}, :health_worker)
       {:error, :no_next_status}
 
   """
@@ -231,7 +243,66 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Returns the total number of reported cases.
+  Records the patient's outcome (`:recovered` or `:died`) on behalf of a
+  user holding `role`.
+
+  Rejected when:
+
+    * `role` is `nil` - same rule as `advance_case_status/2`.
+    * the case is `:not_a_case` - ruled out means there's no case of
+      this disease to have an outcome *of*.
+    * an outcome is already recorded - same "terminal once set" call
+      `LabReporting.record_result/3` makes for a lab result, so a
+      mis-click can't silently overwrite a recorded death. Correcting a
+      wrong outcome is its own, audited action, not an overwrite.
+
+  ## Examples
+
+      iex> record_outcome(case, :recovered, :health_worker)
+      {:ok, %Case{outcome: :recovered}}
+
+      iex> record_outcome(%Case{status: :not_a_case}, :died, :health_worker)
+      {:error, :not_a_case}
+
+  """
+  def record_outcome(%Case{} = case, outcome, role) do
+    cond do
+      is_nil(role) ->
+        {:error, :unauthorized}
+
+      case.status == :not_a_case ->
+        {:error, :not_a_case}
+
+      not is_nil(case.outcome) ->
+        {:error, :outcome_already_recorded}
+
+      true ->
+        with {:ok, case = %Case{}} <-
+               case
+               |> Case.outcome_changeset(%{outcome: outcome})
+               |> Repo.update() do
+          broadcast_case({:updated, case})
+          {:ok, case}
+        end
+    end
+  end
+
+  @doc """
+  Returns `true` if any case record exists at all, `:not_a_case`
+  included.
+
+  For "is this database empty?" checks (`ZamHealthWatch.Demo`'s
+  seed-once guard), where `count_cases/0` would be the wrong question:
+  a database holding only ruled-out cases has zero *countable* cases
+  but is not empty.
+  """
+  def any_cases? do
+    Repo.exists?(Case)
+  end
+
+  @doc """
+  Returns the number of countable cases - suspected or confirmed, not
+  ruled out (see the moduledoc).
 
   ## Examples
 
@@ -240,11 +311,11 @@ defmodule ZamHealthWatch.CaseManagement do
 
   """
   def count_cases do
-    Repo.aggregate(Case, :count, :id)
+    Repo.aggregate(countable(), :count, :id)
   end
 
   @doc """
-  Returns case counts grouped by disease, as `%{disease => count}`.
+  Returns countable case counts grouped by disease, as `%{disease => count}`.
 
   A disease with zero cases is simply absent from the map rather than
   present with `0` - grouping by an `Ecto.Enum` field only ever produces
@@ -261,19 +332,21 @@ defmodule ZamHealthWatch.CaseManagement do
 
   """
   def count_cases_by_disease do
-    Repo.all(from c in Case, group_by: c.disease, select: {c.disease, count(c.id)})
+    Repo.all(from c in countable(), group_by: c.disease, select: {c.disease, count(c.id)})
     |> Map.new()
   end
 
   @doc """
-  Returns case counts grouped by status, as `%{status => count}`.
+  Returns case counts grouped by classification, as `%{status => count}`.
 
-  Same zero-filling note as `count_cases_by_disease/0` applies.
+  The one aggregate that includes `:not_a_case` - how many reports were
+  ruled out is itself a useful surveillance figure. Same zero-filling
+  note as `count_cases_by_disease/0` applies.
 
   ## Examples
 
       iex> count_cases_by_status()
-      %{suspected: 2, confirmed: 1}
+      %{suspected: 2, confirmed: 1, not_a_case: 1}
 
   """
   def count_cases_by_status do
@@ -282,7 +355,27 @@ defmodule ZamHealthWatch.CaseManagement do
   end
 
   @doc """
-  Returns case counts grouped by facility, as `%{facility_id => count}`.
+  Returns countable case counts grouped by recorded outcome, as
+  `%{outcome => count}`. Cases with no outcome yet aren't included.
+
+  ## Examples
+
+      iex> count_cases_by_outcome()
+      %{recovered: 4, died: 1}
+
+  """
+  def count_cases_by_outcome do
+    Repo.all(
+      from c in countable(),
+        where: not is_nil(c.outcome),
+        group_by: c.outcome,
+        select: {c.outcome, count(c.id)}
+    )
+    |> Map.new()
+  end
+
+  @doc """
+  Returns countable case counts grouped by facility, as `%{facility_id => count}`.
 
   Facility *names* aren't joined in here - `CaseManagement` and
   `Geography` are deliberately decoupled (no cross-context
@@ -300,12 +393,12 @@ defmodule ZamHealthWatch.CaseManagement do
 
   """
   def count_cases_by_facility do
-    Repo.all(from c in Case, group_by: c.facility_id, select: {c.facility_id, count(c.id)})
+    Repo.all(from c in countable(), group_by: c.facility_id, select: {c.facility_id, count(c.id)})
     |> Map.new()
   end
 
   @doc """
-  Returns case counts grouped by facility for cases reported in
+  Returns countable case counts grouped by facility for cases reported in
   `[start_dt, end_dt)`, as `%{facility_id => count}`.
 
   Built for `PredictiveAnalytics`'s weekly trend buckets, but a general
@@ -313,7 +406,9 @@ defmodule ZamHealthWatch.CaseManagement do
   reuse anywhere else a windowed count is needed later. Uses `inserted_at`
   as "when the case was reported" - there's no separate
   "when symptoms/the outbreak actually started" field on `Case`, so
-  report time is the closest proxy this system has.
+  report time is the closest proxy this system has. Excluding
+  `:not_a_case` matters most here: a cluster of reports that the lab
+  ruled out shouldn't read as a rising outbreak.
 
   Same zero-omission and name-decoupling notes as `count_cases_by_facility/0`
   apply: a facility with no cases in the window is simply absent, and
@@ -327,11 +422,16 @@ defmodule ZamHealthWatch.CaseManagement do
   """
   def count_cases_by_facility_between(start_dt, end_dt) do
     Repo.all(
-      from c in Case,
+      from c in countable(),
         where: c.inserted_at >= ^start_dt and c.inserted_at < ^end_dt,
         group_by: c.facility_id,
         select: {c.facility_id, count(c.id)}
     )
     |> Map.new()
+  end
+
+  # Suspected or confirmed - the cases surveillance counts.
+  defp countable do
+    from c in Case, where: c.status != :not_a_case
   end
 end

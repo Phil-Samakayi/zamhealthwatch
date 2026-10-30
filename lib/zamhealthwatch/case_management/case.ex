@@ -14,7 +14,24 @@ defmodule ZamHealthWatch.CaseManagement.Case do
   @foreign_key_type :binary_id
   schema "cases" do
     field :disease, Ecto.Enum, values: [:cholera, :malaria, :typhoid, :covid19, :measles]
-    field :status, Ecto.Enum, values: [:suspected, :confirmed, :resolved], default: :suspected
+
+    # The case's *classification* - how certain it is that this is a real
+    # case of `disease` - in the sense surveillance systems use "case
+    # status" (IDSR, SORMAS, CDC's NNDSS). Deliberately separate from
+    # `outcome` below since Iteration 15: before that, `:resolved` meant
+    # both "recovered" and "ruled out by a negative lab test", and the two
+    # are opposite things for surveillance - one is a real case, the
+    # other was never a case at all. See docs/ITERATIONS.md.
+    field :status, Ecto.Enum,
+      values: [:suspected, :confirmed, :not_a_case],
+      default: :suspected
+
+    # What happened to the patient, independent of classification. `nil`
+    # until recorded. A suspected case can have an outcome too - a
+    # patient can die before a lab result comes back.
+    field :outcome, Ecto.Enum, values: [:recovered, :died]
+    field :outcome_at, :utc_datetime
+
     field :facility_id, :binary_id
     field :reported_by_id, :binary_id
 
@@ -24,10 +41,11 @@ defmodule ZamHealthWatch.CaseManagement.Case do
   @doc """
   A case changeset for reporting a new case (or editing its core details).
 
-  `status` is deliberately not castable here - a new case always starts
-  `:suspected` (the schema default). Moving it through its lifecycle is
-  `status_changeset/2`'s job, not this one's, so a single "edit case"
-  form can't accidentally skip straight to `:resolved`.
+  `status` and `outcome` are deliberately not castable here - a new case
+  always starts `:suspected` with no outcome (the schema defaults).
+  Changing classification is `status_changeset/2`'s job and recording an
+  outcome is `outcome_changeset/2`'s, so a single "edit case" form can't
+  accidentally change either.
 
   `facility_id` and `reported_by_id` are checked against `Geography.Facility`
   and `Accounts.User` via `foreign_key_constraint/2` rather than by reaching
@@ -42,19 +60,31 @@ defmodule ZamHealthWatch.CaseManagement.Case do
   end
 
   @doc """
-  A case changeset for moving it through its lifecycle
-  (`:suspected` -> `:confirmed` -> `:resolved`).
+  A case changeset for changing its classification (`:suspected`,
+  `:confirmed`, or `:not_a_case`).
 
-  Only checks that `status` is one of the three valid values, not that
-  the transition itself is legal (e.g. going straight back from `:resolved`
-  to `:suspected` is allowed at the data layer for now) - there's no UI yet
-  to make a stricter rule meaningful, so it isn't guessed at here. Revisit
-  once a real case-management screen needs specific transition buttons.
+  Only checks that `status` is one of the valid values, not that the
+  transition is legal - which transitions a *person* may make by hand is
+  `CaseManagement.advance_case_status/2`'s rule, and a lab result can
+  legitimately move a case in any direction (a positive result on a
+  case previously ruled out confirms it again).
   """
   def status_changeset(case, attrs) do
     case
     |> cast(attrs, [:status])
     |> validate_required([:status])
+  end
+
+  @doc """
+  A case changeset for recording the patient's outcome. Stamps
+  `outcome_at` alongside it, the same "set as a side effect of the real
+  change" shape `LabTest.result_changeset/2` uses for `resulted_at`.
+  """
+  def outcome_changeset(case, attrs) do
+    case
+    |> cast(attrs, [:outcome])
+    |> validate_required([:outcome])
+    |> put_change(:outcome_at, DateTime.utc_now(:second))
   end
 
   @doc """
