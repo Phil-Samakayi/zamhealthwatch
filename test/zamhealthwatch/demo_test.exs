@@ -96,8 +96,8 @@ defmodule ZamHealthWatch.DemoTest do
 
       assert Demo.seed_activity!(now) == :seeded
 
-      # 22 reports, one of them ruled out by a negative lab result.
-      assert CaseManagement.count_cases() == 21
+      # 24 reports, one of them ruled out by a negative lab result.
+      assert CaseManagement.count_cases() == 23
       lab_tests = LabReporting.list_lab_tests()
       assert length(lab_tests) == 4
 
@@ -116,7 +116,7 @@ defmodule ZamHealthWatch.DemoTest do
       assert length(HospitalCapacity.list_capacity_reports()) == 4
       assert length(VaccinationMonitoring.list_vaccination_records()) == 4
 
-      assert CaseManagement.count_cases_by_status() |> Map.values() |> Enum.sum() == 22
+      assert CaseManagement.count_cases_by_status() |> Map.values() |> Enum.sum() == 24
 
       statuses = CaseManagement.count_cases_by_status()
       assert statuses[:suspected] > 0
@@ -126,7 +126,7 @@ defmodule ZamHealthWatch.DemoTest do
       assert CaseManagement.count_cases_by_outcome() == %{died: 1, recovered: 2}
     end
 
-    test "shapes the risk trend: Kabwata elevated, UTH stable, Monze no data", %{
+    test "shapes the facility risk trend: Kabwata elevated, UTH and Monze stable", %{
       facilities: facilities
     } do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -139,7 +139,24 @@ defmodule ZamHealthWatch.DemoTest do
       assert scores[facilities["KBW"].id].weekly_counts == [1, 1, 3, 5]
       assert scores[facilities["KBW"].id].tier == :elevated
       assert scores[facilities["UTH"].id].tier == :stable
-      assert scores[facilities["MMH"].id].tier == :insufficient_data
+      assert scores[facilities["MMH"].id].weekly_counts == [0, 0, 1, 1]
+      assert scores[facilities["MMH"].id].tier == :stable
+    end
+
+    test "shapes the district risk: Monze high from its measles immunity gap, Lusaka elevated, Ndola stable" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      Demo.seed_activity!(now)
+
+      risks = PredictiveAnalytics.list_district_risks(now)
+
+      assert Enum.map(risks, &{&1.district_name, &1.tier}) ==
+               [{"Monze", :high}, {"Lusaka", :elevated}, {"Ndola", :stable}]
+
+      [monze, lusaka, ndola] = risks
+      assert [%{disease: :measles, escalated_by: %{status: :gap}}] = monze.diseases
+      assert [%{disease: :cholera} | _] = lusaka.diseases
+      assert [%{status: :gap}] = lusaka.immunity
+      assert [%{status: :no_data}] = ndola.immunity
     end
 
     test "does nothing to a database that already has cases", %{facilities: facilities} do
@@ -187,7 +204,7 @@ defmodule ZamHealthWatch.DemoTest do
     test "returns how many rows it deleted from each table" do
       deleted = Demo.reset_activity!()
 
-      assert deleted["cases"] == 22
+      assert deleted["cases"] == 24
       assert deleted["lab_tests"] == 4
       assert deleted["lab_result_corrections"] == 1
       assert deleted["lab_correction_acknowledgements"] == 0
@@ -214,7 +231,7 @@ defmodule ZamHealthWatch.DemoTest do
 
       assert Demo.seed_activity!() == :seeded
       assert [_notice] = LabReporting.list_correction_notices(worker.id)
-      assert CaseManagement.count_cases() == 21
+      assert CaseManagement.count_cases() == 23
     end
   end
 

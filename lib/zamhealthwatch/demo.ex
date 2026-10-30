@@ -108,8 +108,16 @@ defmodule ZamHealthWatch.Demo do
   #     seed_case_outcomes!/2), and ruled-out reports don't count, so
   #     the risk trend sees 1, 1, 3, 5 - still Elevated.
   #   * UTH: 2 cases every week - Stable.
-  #   * NTH: 0, 0, 1, 1 - Stable.
-  #   * MMH: one case six weeks ago, outside the window - No data.
+  #   * NTH: 0, 0, 1, 1 measles - Stable. Ndola has no measles-rubella
+  #     coverage record, so the district read shows "No coverage data".
+  #   * MMH: 0, 0, 1, 1 measles - Stable for the facility - plus a
+  #     malaria case six weeks ago, outside the window. Monze's
+  #     measles-rubella coverage is 47.5% (@demo_coverage), so the
+  #     district read raises Monze to High (Iteration 17).
+  #
+  # District read: Monze High, Lusaka Elevated (cholera; its 84% coverage
+  # shows as a gap but changes nothing without measles cases), Ndola
+  # Stable.
   #
   # The trend is relative to the moment of seeding, so it ages: four
   # weeks after a database is seeded, these cases fall out of the risk
@@ -137,6 +145,8 @@ defmodule ZamHealthWatch.Demo do
     {"UTH", :malaria, 2},
     {"NTH", :measles, 12},
     {"NTH", :measles, 3},
+    {"MMH", :measles, 12},
+    {"MMH", :measles, 3},
     {"MMH", :malaria, 40}
   ]
 
