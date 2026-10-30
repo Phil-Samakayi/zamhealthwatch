@@ -10,6 +10,7 @@ defmodule ZamHealthWatchWeb.NationalReportingLive.Index do
   alias ZamHealthWatch.LabReporting
   alias ZamHealthWatch.LabReporting.LabTest
   alias ZamHealthWatch.NationalReporting
+  alias ZamHealthWatch.NationalReporting.FacilitySummary
   alias ZamHealthWatch.VaccinationMonitoring
   alias ZamHealthWatch.VaccinationMonitoring.VaccinationRecord
 
@@ -45,7 +46,8 @@ defmodule ZamHealthWatchWeb.NationalReportingLive.Index do
       <.table :if={@facility_summaries != []} id="facility-summaries" rows={@facility_summaries}>
         <:col :let={s} label="Facility">{s.facility_name}</:col>
         <:col :let={s} label="District">{s.district_name}</:col>
-        <:col :let={s} label="Cases">{case_counts_label(s.cases_by_status)}</:col>
+        <:col :let={s} label="Cases">{case_counts_label(s)}</:col>
+        <:col :let={s} label="Deaths">{Map.get(s.cases_by_outcome, :died, 0)}</:col>
         <:col :let={s} label="Lab tests">{lab_test_counts_label(s.lab_tests_by_status)}</:col>
         <:col :let={s} label="Drug stock">{drug_stock_label(s)}</:col>
         <:col :let={s} label="Hospital capacity">
@@ -124,10 +126,11 @@ defmodule ZamHealthWatchWeb.NationalReportingLive.Index do
     |> assign(:vaccination_rows, NationalReporting.vaccination_coverage())
   end
 
-  defp case_counts_label(cases_by_status) do
-    "#{Map.get(cases_by_status, :suspected, 0)} suspected · " <>
-      "#{Map.get(cases_by_status, :confirmed, 0)} confirmed · " <>
-      "#{Map.get(cases_by_status, :resolved, 0)} resolved"
+  defp case_counts_label(%FacilitySummary{cases_by_status: by_status} = summary) do
+    "#{FacilitySummary.case_total(summary)} " <>
+      "(#{Map.get(by_status, :suspected, 0)} suspected · " <>
+      "#{Map.get(by_status, :confirmed, 0)} confirmed) · " <>
+      "#{Map.get(by_status, :not_a_case, 0)} ruled out"
   end
 
   defp lab_test_counts_label(lab_tests_by_status) do

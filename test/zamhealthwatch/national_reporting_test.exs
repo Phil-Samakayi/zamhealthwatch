@@ -20,6 +20,7 @@ defmodule ZamHealthWatch.NationalReportingTest do
       assert summary.facility_name == facility.name
       assert summary.district_name == "-"
       assert summary.cases_by_status == %{}
+      assert summary.cases_by_outcome == %{}
       assert summary.lab_tests_by_status == %{}
       assert summary.drug_stock_count == 0
       assert summary.drug_shortage_count == 0
@@ -43,6 +44,19 @@ defmodule ZamHealthWatch.NationalReportingTest do
 
       assert [summary] = NationalReporting.facility_summary()
       assert summary.cases_by_status == %{suspected: 1, confirmed: 1}
+    end
+
+    test "counts ruled-out reports and deaths separately from the case total" do
+      facility = facility_fixture()
+      died = case_fixture(%{facility_id: facility.id})
+      {:ok, _} = ZamHealthWatch.CaseManagement.record_outcome(died, :died, :health_worker)
+      ruled_out = case_fixture(%{facility_id: facility.id})
+      ZamHealthWatch.CaseManagement.update_case_status(ruled_out, %{status: :not_a_case})
+
+      assert [summary] = NationalReporting.facility_summary()
+      assert FacilitySummary.case_total(summary) == 1
+      assert summary.cases_by_status[:not_a_case] == 1
+      assert summary.cases_by_outcome == %{died: 1}
     end
 
     test "folds lab test counts in by status" do
@@ -115,8 +129,9 @@ defmodule ZamHealthWatch.NationalReportingTest do
       csv = NationalReporting.export_csv() |> IO.iodata_to_binary()
 
       assert csv =~
-               "Facility,District,Cases (suspected),Cases (confirmed),Cases (resolved)," <>
-                 "Cases (total),Lab tests (pending),Lab tests (resulted),Drug stock records," <>
+               "Facility,District,Cases (suspected),Cases (confirmed),Cases (total)," <>
+                 "Ruled out (not a case),Deaths,Lab tests (pending),Lab tests (resulted)," <>
+                 "Drug stock records," <>
                  "Drug stock shortages,Hospital capacity status,Risk tier,Case trend (4wk slope)"
 
       # One case reported just now lands in the most recent weekly
@@ -125,7 +140,7 @@ defmodule ZamHealthWatch.NationalReportingTest do
       # facility with zero cases across all four weeks). Least-squares
       # slope over [0, 0, 0, 1] is 0.3, below PredictiveAnalytics'
       # 0.5 "elevated" threshold, so the tier reads as Stable.
-      assert csv =~ "Kabwata Clinic,-,1,0,0,1,0,0,0,0,No data,Stable,0.3\r\n"
+      assert csv =~ "Kabwata Clinic,-,1,0,1,0,0,0,0,0,0,No data,Stable,0.3\r\n"
     end
 
     test "includes a second, district-grain vaccination coverage table" do

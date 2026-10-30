@@ -67,8 +67,9 @@ defmodule ZamHealthWatch.NationalReporting do
     "District",
     "Cases (suspected)",
     "Cases (confirmed)",
-    "Cases (resolved)",
     "Cases (total)",
+    "Ruled out (not a case)",
+    "Deaths",
     "Lab tests (pending)",
     "Lab tests (resulted)",
     "Drug stock records",
@@ -114,8 +115,15 @@ defmodule ZamHealthWatch.NationalReporting do
   end
 
   defp build_facility_summary(facility, districts_by_id, risk_by_facility) do
-    cases_by_status =
-      facility.id |> CaseManagement.list_cases_by_facility() |> Enum.frequencies_by(& &1.status)
+    cases = CaseManagement.list_cases_by_facility(facility.id)
+    cases_by_status = Enum.frequencies_by(cases, & &1.status)
+
+    # Outcomes among countable cases only - a ruled-out report has no
+    # outcome to count (CaseManagement.record_outcome/3 refuses one).
+    cases_by_outcome =
+      cases
+      |> Enum.filter(&(&1.status != :not_a_case and not is_nil(&1.outcome)))
+      |> Enum.frequencies_by(& &1.outcome)
 
     lab_tests_by_status =
       facility.id
@@ -129,6 +137,7 @@ defmodule ZamHealthWatch.NationalReporting do
       facility_name: facility.name,
       district_name: Map.get(districts_by_id, facility.district_id, "-"),
       cases_by_status: cases_by_status,
+      cases_by_outcome: cases_by_outcome,
       lab_tests_by_status: lab_tests_by_status,
       drug_stock_count: length(drug_stocks),
       drug_shortage_count: Enum.count(drug_stocks, &DrugStock.shortage?/1),
@@ -166,8 +175,9 @@ defmodule ZamHealthWatch.NationalReporting do
       summary.district_name,
       Map.get(summary.cases_by_status, :suspected, 0),
       Map.get(summary.cases_by_status, :confirmed, 0),
-      Map.get(summary.cases_by_status, :resolved, 0),
-      summary.cases_by_status |> Map.values() |> Enum.sum(),
+      FacilitySummary.case_total(summary),
+      Map.get(summary.cases_by_status, :not_a_case, 0),
+      Map.get(summary.cases_by_outcome, :died, 0),
       Map.get(summary.lab_tests_by_status, :pending, 0),
       Map.get(summary.lab_tests_by_status, :resulted, 0),
       summary.drug_stock_count,
