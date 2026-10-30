@@ -10,6 +10,7 @@ defmodule ZamHealthWatchWeb.PortalLive.Index do
   alias ZamHealthWatch.Geography
   alias ZamHealthWatch.HospitalCapacity
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
+  alias ZamHealthWatch.LabReporting
 
   @recent_limit 5
 
@@ -26,6 +27,16 @@ defmodule ZamHealthWatchWeb.PortalLive.Index do
           <span :if={!@facility}>You haven't been assigned to a facility yet.</span>
         </:subtitle>
       </.header>
+
+      <div :if={@correction_notice_count > 0} id="correction-notice" class="alert alert-warning mt-4">
+        <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+        <span>
+          {if @correction_notice_count == 1,
+            do: "A result on a test you requested has been corrected.",
+            else: "#{@correction_notice_count} results on tests you requested have been corrected."}
+          <.link href={~p"/labs"} class="link">Review on the lab screen</.link>
+        </span>
+      </div>
 
       <div :if={!@facility} class="alert alert-info mt-4">
         <.icon name="hero-information-circle" class="size-5 shrink-0" />
@@ -105,7 +116,19 @@ defmodule ZamHealthWatchWeb.PortalLive.Index do
       HospitalCapacity.subscribe_capacity_reports()
     end
 
-    {:ok, assign_portal(socket, facility_id)}
+    # Shown whether or not the user has a facility: anyone can request a
+    # lab test, so anyone can have a corrected result waiting. Counted
+    # once on mount - acknowledging happens on the lab screen, which
+    # shows the notices themselves and keeps them live.
+    correction_notice_count =
+      socket.assigns.current_scope.user.id
+      |> LabReporting.list_correction_notices()
+      |> length()
+
+    {:ok,
+     socket
+     |> assign(:correction_notice_count, correction_notice_count)
+     |> assign_portal(facility_id)}
   end
 
   # Only recomputes when the event is actually about this viewer's own

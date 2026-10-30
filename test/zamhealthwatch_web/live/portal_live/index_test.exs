@@ -7,6 +7,7 @@ defmodule ZamHealthWatchWeb.PortalLive.IndexTest do
   import ZamHealthWatch.CaseManagementFixtures
   import ZamHealthWatch.DrugAvailabilityFixtures
   import ZamHealthWatch.HospitalCapacityFixtures
+  import ZamHealthWatch.LabReportingFixtures
 
   describe "Portal" do
     test "redirects if user is not logged in", %{conn: conn} do
@@ -90,6 +91,52 @@ defmodule ZamHealthWatchWeb.PortalLive.IndexTest do
       # A case at the viewer's own facility should appear live, no reload.
       case_fixture(%{facility_id: facility.id, disease: :typhoid})
       assert render(lv) =~ "Typhoid"
+    end
+  end
+
+  describe "correction notice" do
+    test "tells a requester how many corrected results are waiting, with a link to review", %{
+      conn: conn
+    } do
+      facility = facility_fixture()
+      requester = user_fixture() |> set_role(:health_worker, facility.id)
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+
+      lab_test =
+        lab_test_fixture(%{
+          case_id: case_fixture(%{facility_id: facility.id}).id,
+          requested_by_id: requester.id
+        })
+
+      {:ok, issued} = ZamHealthWatch.LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, _} =
+        ZamHealthWatch.LabReporting.correct_result(
+          issued,
+          :negative,
+          "Repeat test negative.",
+          lab_officer
+        )
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(requester)
+        |> live(~p"/portal")
+
+      assert has_element?(lv, "#correction-notice", "has been corrected")
+      assert has_element?(lv, ~s(#correction-notice a[href="/labs"]))
+    end
+
+    test "isn't shown when there's nothing to review", %{conn: conn} do
+      facility = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/portal")
+
+      refute has_element?(lv, "#correction-notice")
     end
   end
 end

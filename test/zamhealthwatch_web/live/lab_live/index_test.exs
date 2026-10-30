@@ -533,4 +533,65 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
     # default `stream/3` id) rather than a page-wide element check.
     defp row_selector(%{id: id}), do: "#lab_tests-#{id}"
   end
+
+  describe "correction notices for the requester" do
+    setup %{conn: conn} do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      case_record = case_fixture(%{disease: :cholera, facility_id: facility.id})
+      requester = user_fixture() |> set_role(:health_worker, facility.id)
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+
+      lab_test = lab_test_fixture(%{case_id: case_record.id, requested_by_id: requester.id})
+      {:ok, issued} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, _} =
+        LabReporting.correct_result(issued, :negative, "Repeat test negative.", lab_officer)
+
+      %{conn: conn, requester: requester, lab_test: lab_test}
+    end
+
+    test "the requester sees the correction and can mark it as seen", %{
+      conn: conn,
+      requester: requester
+    } do
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(requester)
+        |> live(~p"/labs")
+
+      assert has_element?(lv, "#correction-notices", "Positive → Negative")
+      assert has_element?(lv, "#correction-notices", "Repeat test negative.")
+
+      lv |> element("#correction-notices button", "Mark as seen") |> render_click()
+
+      refute has_element?(lv, "#correction-notices")
+      assert LabReporting.list_correction_notices(requester.id) == []
+    end
+
+    test "other users don't see the requester's notice", %{conn: conn} do
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user_fixture() |> set_role(:district_officer))
+        |> live(~p"/labs")
+
+      refute has_element?(lv, "#correction-notices")
+    end
+
+    test "a forged acknowledgement from someone else is refused", %{
+      conn: conn,
+      requester: requester
+    } do
+      [notice] = LabReporting.list_correction_notices(requester.id)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user_fixture() |> set_role(:district_officer))
+        |> live(~p"/labs")
+
+      result = render_click(lv, "acknowledge_correction", %{"id" => notice.id})
+
+      assert result =~ "Only the person who requested this test can mark it as seen."
+      assert [_still_there] = LabReporting.list_correction_notices(requester.id)
+    end
+  end
 end

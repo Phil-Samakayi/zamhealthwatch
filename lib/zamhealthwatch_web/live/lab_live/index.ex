@@ -27,6 +27,33 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
         </:subtitle>
       </.header>
 
+      <div
+        :if={@correction_notices != []}
+        id="correction-notices"
+        class="alert alert-warning flex-col items-start"
+      >
+        <p class="font-semibold">
+          {if length(@correction_notices) == 1,
+            do: "A result on a test you requested has been corrected",
+            else: "Results on tests you requested have been corrected"}
+        </p>
+        <ul class="w-full space-y-1">
+          <li
+            :for={notice <- @correction_notices}
+            id={"notice-#{notice.id}"}
+            class="flex flex-wrap items-center justify-between gap-2"
+          >
+            <span>
+              {correction_case_label(notice, @lab_tests_by_id, @cases_by_id, @facilities_by_id)}:
+              <span class="font-semibold">{change_label(notice)}</span> - {notice.reason}
+            </span>
+            <.button class="btn btn-xs" phx-click="acknowledge_correction" phx-value-id={notice.id}>
+              Mark as seen
+            </.button>
+          </li>
+        </ul>
+      </div>
+
       <div :if={@scope == :unassigned} class="alert alert-info">
         <.icon name="hero-information-circle" class="size-5 shrink-0" />
         <span>
@@ -200,6 +227,7 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
       |> assign(:lab_tests_by_id, lab_tests_by_id)
       |> assign(:correcting, nil)
       |> assign_corrections()
+      |> assign_correction_notices()
       |> assign_form(LabReporting.change_lab_test(%LabTest{}))
       |> stream(:lab_tests, lab_tests)
 
@@ -232,6 +260,16 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
       Enum.filter(LabReporting.list_corrections(), &Map.has_key?(visible_ids, &1.lab_test_id))
 
     assign(socket, :corrections, corrections)
+  end
+
+  # Corrections to results on tests this user requested, not yet marked
+  # as seen - see LabReporting.list_correction_notices/1.
+  defp assign_correction_notices(socket) do
+    assign(
+      socket,
+      :correction_notices,
+      LabReporting.list_correction_notices(socket.assigns.current_scope.user.id)
+    )
   end
 
   @impl true
@@ -312,6 +350,20 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
 
   def handle_event("cancel_correction", _params, socket) do
     {:noreply, assign(socket, :correcting, nil)}
+  end
+
+  def handle_event("acknowledge_correction", %{"id" => id}, socket) do
+    case LabReporting.acknowledge_correction(id, socket.assigns.current_scope.user) do
+      {:ok, _acknowledgement} ->
+        {:noreply, assign_correction_notices(socket)}
+
+      {:error, :not_requester} ->
+        {:noreply,
+         put_flash(socket, :error, "Only the person who requested this test can mark it as seen.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "That notice couldn't be found.")}
+    end
   end
 
   def handle_event("submit_correction", %{"correction" => params}, socket) do
@@ -407,7 +459,8 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
        socket
        |> stream_insert(:lab_tests, lab_test)
        |> update(:lab_tests_by_id, &Map.put(&1, lab_test.id, lab_test))
-       |> assign_corrections()}
+       |> assign_corrections()
+       |> assign_correction_notices()}
     else
       {:noreply, stream_insert(socket, :lab_tests, lab_test)}
     end
