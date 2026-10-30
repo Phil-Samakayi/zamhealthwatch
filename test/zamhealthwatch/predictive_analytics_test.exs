@@ -3,10 +3,11 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
 
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics
-  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, RiskScore}
+  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, ImmunityStatus, RiskScore}
 
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.HospitalCapacityFixtures
+  import ZamHealthWatch.VaccinationMonitoringFixtures
 
   # A fixed reference point rather than DateTime.utc_now/0, so every
   # case below lands in a known, predictable one of the four weekly
@@ -222,6 +223,109 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
       assert PredictiveAnalytics.list_district_risks(@now) |> Enum.map(& &1.district_id) ==
                [rising.id, steady.id, quiet.id]
     end
+  end
+
+  describe "list_district_risks/1 with vaccination coverage" do
+    test "raises measles to high where measles-rubella coverage is below 95%" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      report_disease_weeks_ago(facility, :measles, 0)
+      coverage(district, 80)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert risk.tier == :high
+
+      assert [%DiseaseTrend{disease: :measles} = measles] = risk.diseases
+      assert measles.weekly_counts == [0, 0, 0, 1]
+      assert measles.tier == :high
+
+      assert %ImmunityStatus{antigen: :measles_rubella, status: :gap} = measles.escalated_by
+      assert_in_delta measles.escalated_by.coverage_rate, 0.8, 0.0001
+    end
+
+    test "leaves measles at its trend tier when coverage is 95% or more" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      report_disease_weeks_ago(facility, :measles, 0)
+      coverage(district, 95)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert [%ImmunityStatus{status: :adequate}] = risk.immunity
+      assert [%DiseaseTrend{tier: :stable, escalated_by: nil}] = risk.diseases
+      assert risk.tier == :stable
+    end
+
+    test "leaves measles at its trend tier when the district has no coverage record" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      report_disease_weeks_ago(facility, :measles, 0)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+
+      assert [%ImmunityStatus{disease: :measles, status: :no_data, coverage_rate: nil}] =
+               risk.immunity
+
+      assert [%DiseaseTrend{tier: :stable, escalated_by: nil}] = risk.diseases
+    end
+
+    test "shows a gap without measles cases, but changes no tier - including other diseases'" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      report_disease_weeks_ago(facility, :cholera, 0)
+      coverage(district, 50)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert [%ImmunityStatus{status: :gap}] = risk.immunity
+      assert [%DiseaseTrend{disease: :cholera, tier: :stable, escalated_by: nil}] = risk.diseases
+      assert risk.tier == :stable
+    end
+
+    test "uses the district's most recent coverage record" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      report_disease_weeks_ago(facility, :measles, 0)
+
+      district
+      |> coverage(50)
+      |> Ecto.Changeset.change(
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60)
+      )
+      |> ZamHealthWatch.Repo.update!()
+
+      coverage(district, 97)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert [%ImmunityStatus{status: :adequate}] = risk.immunity
+      assert risk.tier == :stable
+    end
+
+    test "sorts a high district above an elevated one" do
+      elevated = district_fixture(%{name: "Elevated"})
+      high = district_fixture(%{name: "High"})
+      elevated_facility = facility_fixture(%{district_id: elevated.id})
+      high_facility = facility_fixture(%{district_id: high.id})
+
+      for weeks_ago <- 3..0//-1, _n <- 1..(4 - weeks_ago) do
+        report_disease_weeks_ago(elevated_facility, :cholera, weeks_ago)
+      end
+
+      report_disease_weeks_ago(high_facility, :measles, 0)
+      coverage(high, 60)
+
+      assert PredictiveAnalytics.list_district_risks(@now) |> Enum.map(& &1.tier) ==
+               [:high, :elevated]
+    end
+  end
+
+  # A measles-rubella coverage record for `district` at `percent`% of a
+  # 100-person target.
+  defp coverage(district, percent) do
+    vaccination_record_fixture(%{
+      district_id: district.id,
+      antigen: :measles_rubella,
+      doses_administered: percent,
+      target_population: 100
+    })
   end
 
   # weeks_ago 0 lands in the most recent 7-day bucket ("this week");

@@ -32,7 +32,10 @@ defmodule ZamHealthWatch.PredictiveAnalytics.RiskScore do
     :capacity_status
   ]
 
-  @type tier :: :insufficient_data | :stable | :elevated
+  # :high only comes from the district read, where an immunity gap
+  # raises a vaccine-preventable disease (Iteration 17). A facility's
+  # own tier is never :high.
+  @type tier :: :insufficient_data | :stable | :elevated | :high
 
   @type capacity_status :: :no_data | :adequate | :near_capacity | :over_capacity
 

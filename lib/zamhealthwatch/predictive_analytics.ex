@@ -11,6 +11,11 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
       together lets a rise in one hide behind a fall in another: cholera
       going 1, 2, 3, 4 while malaria goes 4, 3, 2, 1 sums to a flat
       5, 5, 5, 5.
+
+      Vaccination coverage feeds in here, but only for the disease the
+      vaccine prevents: measles cases in a district whose latest
+      measles-rubella coverage is below 95% raise measles, and so the
+      district, to `:high`. See `@vaccine_for` below.
     * `list_risk_scores/1` - the original per-facility read, all
       diseases together, with the facility's hospital capacity status
       beside it. Kept because capacity is reported per facility and a
@@ -50,16 +55,36 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   `Geography` above.
   """
 
-  alias ZamHealthWatch.{CaseManagement, Geography, HospitalCapacity}
+  alias ZamHealthWatch.{CaseManagement, Geography, HospitalCapacity, VaccinationMonitoring}
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
-  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, RiskScore}
+  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, ImmunityStatus, RiskScore}
+  alias ZamHealthWatch.VaccinationMonitoring.VaccinationRecord
 
   @weeks 4
   @rising_threshold 0.5
 
   # Higher is worse. Picks a district's tier from its diseases' tiers,
   # and sorts districts and diseases most at risk first.
-  @tier_rank %{insufficient_data: 0, stable: 1, elevated: 2}
+  @tier_rank %{insufficient_data: 0, stable: 1, elevated: 2, high: 3}
+
+  # Which vaccine protects against which disease this system tracks.
+  # Of the five diseases cases can be reported for, only measles has an
+  # antigen in VaccinationRecord's list - there's none for cholera,
+  # malaria, typhoid, or COVID-19 - so coverage is applied to measles
+  # and nothing else. Coverage of one vaccine says nothing about a
+  # disease it doesn't prevent.
+  @vaccine_for %{measles: :measles_rubella}
+
+  # Coverage below this leaves an immunity gap. 95% is the commonly
+  # cited level needed to stop measles spreading, and population
+  # immunity is one of the four categories in WHO's district-level
+  # measles risk assessment tool. The tool's other three (surveillance
+  # quality, programme performance, threat assessment) need data this
+  # system doesn't collect.
+  @immunity_threshold 0.95
+
+  @doc "The coverage rate below which a district has an immunity gap, as a fraction."
+  def immunity_threshold, do: @immunity_threshold
 
   @doc """
   Returns one `RiskScore` per known facility, highest recent case count
@@ -105,6 +130,13 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   no district isn't counted in any district; it still appears in
   `list_risk_scores/1`.
 
+  Vaccination: each district also gets an `ImmunityStatus` for every
+  vaccine-preventable disease (only measles, today), from its latest
+  coverage record. If that's an immunity gap and the disease has cases
+  in the window, the disease's tier is raised to `:high`. A gap with no
+  cases is shown but changes no tier: it's a vulnerability, not an
+  outbreak. No coverage record is `:no_data` and changes nothing.
+
   Same `now` argument as `list_risk_scores/1`, for the same reason.
   """
   def list_district_risks(now \\ DateTime.utc_now()) do
@@ -122,8 +154,13 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
         |> by_district_and_disease(district_by_facility)
       end)
 
+    coverage_by_disease =
+      Map.new(@vaccine_for, fn {disease, antigen} ->
+        {disease, VaccinationMonitoring.latest_coverage_by_district(antigen)}
+      end)
+
     Geography.list_districts()
-    |> Enum.map(&build_district_risk(&1, buckets))
+    |> Enum.map(&build_district_risk(&1, buckets, coverage_by_disease))
     |> Enum.sort_by(&{-Map.fetch!(@tier_rank, &1.tier), -&1.recent_count, &1.district_name})
   end
 
@@ -139,7 +176,15 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
     end)
   end
 
-  defp build_district_risk(district, buckets) do
+  defp build_district_risk(district, buckets, coverage_by_disease) do
+    immunity =
+      @vaccine_for
+      |> Enum.sort()
+      |> Enum.map(fn {disease, antigen} ->
+        record = coverage_by_disease |> Map.fetch!(disease) |> Map.get(district.id)
+        immunity_status(disease, antigen, record)
+      end)
+
     diseases =
       buckets
       |> Enum.flat_map(&Map.keys/1)
@@ -148,7 +193,7 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
       |> Enum.uniq()
       |> Enum.map(fn disease ->
         counts = Enum.map(buckets, &Map.get(&1, {district.id, disease}, 0))
-        build_disease_trend(disease, counts)
+        build_disease_trend(disease, counts, immunity)
       end)
       |> Enum.sort_by(
         &{-Map.fetch!(@tier_rank, &1.tier), -&1.recent_count, -&1.trend_slope, &1.disease}
@@ -160,8 +205,19 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
       province: district.province,
       recent_count: diseases |> Enum.map(& &1.recent_count) |> Enum.sum(),
       tier: worst_tier(diseases),
-      diseases: diseases
+      diseases: diseases,
+      immunity: immunity
     }
+  end
+
+  defp immunity_status(disease, antigen, nil) do
+    %ImmunityStatus{disease: disease, antigen: antigen, coverage_rate: nil, status: :no_data}
+  end
+
+  defp immunity_status(disease, antigen, %VaccinationRecord{} = record) do
+    rate = VaccinationRecord.coverage_rate(record)
+    status = if rate < @immunity_threshold, do: :gap, else: :adequate
+    %ImmunityStatus{disease: disease, antigen: antigen, coverage_rate: rate, status: status}
   end
 
   # `diseases` is already sorted worst first. Every disease in it had at
@@ -170,15 +226,20 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   defp worst_tier([]), do: :insufficient_data
   defp worst_tier([worst | _rest]), do: worst.tier
 
-  defp build_disease_trend(disease, counts) do
+  # Every disease reaching here had at least one case in the window, so
+  # a gap for it means cases are already circulating in a population
+  # that can't stop them spreading - :high whatever the slope says.
+  defp build_disease_trend(disease, counts, immunity) do
     slope = trend_slope(counts)
+    gap = Enum.find(immunity, &(&1.disease == disease and &1.status == :gap))
 
     %DiseaseTrend{
       disease: disease,
       weekly_counts: counts,
       recent_count: List.last(counts),
       trend_slope: slope,
-      tier: tier_for(counts, slope)
+      tier: if(gap, do: :high, else: tier_for(counts, slope)),
+      escalated_by: gap
     }
   end
 
