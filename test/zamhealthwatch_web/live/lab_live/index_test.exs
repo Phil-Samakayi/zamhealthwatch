@@ -241,7 +241,7 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
       end
     end
 
-    test "shows no action buttons for an already-resulted test, even to a lab officer", %{
+    test "offers Correct/Withdraw instead of result buttons once a test is resulted", %{
       conn: conn,
       case_record: case_record,
       lab_officer: lab_officer
@@ -254,7 +254,9 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
         |> log_in_user(lab_officer)
         |> live(~p"/labs")
 
-      refute has_element?(lv, row_selector(lab_test) <> " button")
+      refute has_element?(lv, row_selector(lab_test) <> " button", "Positive")
+      assert has_element?(lv, row_selector(lab_test) <> " button", "Correct")
+      assert has_element?(lv, row_selector(lab_test) <> " button", "Withdraw")
     end
 
     test "shows who entered a result", %{
@@ -384,6 +386,143 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
 
       assert result =~ "Unrecognized result value."
       assert LabReporting.get_lab_test!(lab_test.id).status == :pending
+    end
+
+    test "a lab officer corrects a result through the panel, and the history shows it", %{
+      conn: conn,
+      case_record: case_record,
+      lab_officer: lab_officer
+    } do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(lab_officer)
+        |> live(~p"/labs")
+
+      lv |> element(row_selector(lab_test) <> " button", "Correct") |> render_click()
+      assert has_element?(lv, "#correction-panel", "Correct a result")
+
+      result =
+        lv
+        |> form("#correction-form", %{
+          "correction" => %{
+            "new_result" => "negative",
+            "reason" => "Repeat test on a fresh sample was negative."
+          }
+        })
+        |> render_submit()
+
+      assert result =~ "Result corrected to Negative."
+      refute has_element?(lv, "#correction-panel")
+      assert LabReporting.get_lab_test!(lab_test.id).status == :corrected
+      assert CaseManagement.get_case!(case_record.id).status == :not_a_case
+
+      assert has_element?(lv, "#correction-history", "Positive → Negative")
+      assert has_element?(lv, "#correction-history", "Repeat test on a fresh sample was negative.")
+    end
+
+    test "a too-short reason is shown as an error and nothing changes", %{
+      conn: conn,
+      case_record: case_record,
+      lab_officer: lab_officer
+    } do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(lab_officer)
+        |> live(~p"/labs")
+
+      lv |> element(row_selector(lab_test) <> " button", "Correct") |> render_click()
+
+      result =
+        lv
+        |> form("#correction-form", %{
+          "correction" => %{"new_result" => "negative", "reason" => "oops"}
+        })
+        |> render_submit()
+
+      assert result =~ "should be at least 10 character(s)"
+      assert has_element?(lv, "#correction-panel")
+      assert LabReporting.get_lab_test!(lab_test.id).result == :positive
+    end
+
+    test "a lab officer withdraws a result through the panel", %{
+      conn: conn,
+      case_record: case_record,
+      lab_officer: lab_officer
+    } do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(lab_officer)
+        |> live(~p"/labs")
+
+      lv |> element(row_selector(lab_test) <> " button", "Withdraw") |> render_click()
+
+      result =
+        lv
+        |> form("#correction-form", %{
+          "correction" => %{"reason" => "Entered against the wrong case."}
+        })
+        |> render_submit()
+
+      assert result =~ "Result withdrawn."
+      assert LabReporting.get_lab_test!(lab_test.id).status == :entered_in_error
+      assert CaseManagement.get_case!(case_record.id).status == :suspected
+      assert has_element?(lv, row_selector(lab_test), "Withdrawn")
+      assert has_element?(lv, "#correction-history", "withdrawn (entered in error)")
+    end
+
+    test "an MOH admin sees Correct/Withdraw on a resulted test", %{
+      conn: conn,
+      case_record: case_record,
+      lab_officer: lab_officer
+    } do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user_fixture() |> set_role(:moh_admin))
+        |> live(~p"/labs")
+
+      assert has_element?(lv, row_selector(lab_test) <> " button", "Correct")
+    end
+
+    test "a district officer gets no Correct button, and forged correction events are refused",
+         %{conn: conn, case_record: case_record, lab_officer: lab_officer} do
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _resulted} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user_fixture() |> set_role(:district_officer))
+        |> live(~p"/labs")
+
+      refute has_element?(lv, row_selector(lab_test) <> " button", "Correct")
+
+      result = render_click(lv, "start_correction", %{"id" => lab_test.id, "mode" => "correct"})
+      assert result =~ "Only a lab officer or MOH admin can correct or withdraw a result."
+      refute has_element?(lv, "#correction-panel")
+
+      result =
+        render_submit(lv, "submit_correction", %{
+          "correction" => %{
+            "lab_test_id" => lab_test.id,
+            "mode" => "correct",
+            "new_result" => "negative",
+            "reason" => "A forged but long enough reason."
+          }
+        })
+
+      assert result =~ "Only a lab officer or MOH admin can correct or withdraw a result."
+      assert LabReporting.get_lab_test!(lab_test.id).result == :positive
     end
 
     # Same PubSub-leakage risk CaseLive.IndexTest's own row_selector/1
