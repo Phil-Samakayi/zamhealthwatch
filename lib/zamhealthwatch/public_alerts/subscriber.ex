@@ -4,9 +4,14 @@ defmodule ZamHealthWatch.PublicAlerts.Subscriber do
 
   Subscribes to `CaseManagement`'s `"cases"` PubSub topic and, on every
   `{:created, case}` broadcast, enqueues an `AlertWorker` job. Doesn't
-  react to `{:updated, case}` - alerting on every later status change
-  (e.g. a case moving from `:suspected` to `:confirmed`) isn't part of
-  this slice; only the initial report triggers an alert for now.
+  react to `{:updated, case}` - a case being confirmed doesn't change
+  the advice the original alert already gave.
+
+  Since Iteration 15 it also subscribes to case reclassifications, and
+  enqueues a `ReclassificationAlertWorker` follow-up when a case is
+  ruled out (`:not_a_case`), or when a correction reverses that - the
+  people who were warned about a case are told when it turns out not
+  to be one, and told again if that turns out to be wrong.
 
   A small, permanent `GenServer` rather than a one-off `Task`, because it
   needs to live for the app's whole lifetime and keep its PubSub
@@ -22,6 +27,7 @@ defmodule ZamHealthWatch.PublicAlerts.Subscriber do
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.PublicAlerts.AlertWorker
+  alias ZamHealthWatch.PublicAlerts.ReclassificationAlertWorker
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -30,6 +36,7 @@ defmodule ZamHealthWatch.PublicAlerts.Subscriber do
   @impl true
   def init(_opts) do
     CaseManagement.subscribe_cases()
+    CaseManagement.subscribe_reclassifications()
     {:ok, %{}}
   end
 
@@ -47,4 +54,26 @@ defmodule ZamHealthWatch.PublicAlerts.Subscriber do
   end
 
   def handle_info({:updated, %Case{}}, state), do: {:noreply, state}
+
+  def handle_info({:reclassified, %Case{status: to} = case_record, from}, state)
+      when to == :not_a_case or from == :not_a_case do
+    job =
+      ReclassificationAlertWorker.new(%{
+        case_id: case_record.id,
+        from: Atom.to_string(from),
+        to: Atom.to_string(to)
+      })
+
+    case Oban.insert(job) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Failed to enqueue a public alert follow-up job: #{inspect(reason)}")
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:reclassified, %Case{}, _from}, state), do: {:noreply, state}
 end

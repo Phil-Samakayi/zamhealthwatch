@@ -29,6 +29,8 @@ defmodule ZamHealthWatch.PublicAlerts do
   """
 
   import Ecto.Query, warn: false
+  require Logger
+
   alias ZamHealthWatch.Repo
   alias ZamHealthWatch.SmsGateway
 
@@ -152,6 +154,32 @@ defmodule ZamHealthWatch.PublicAlerts do
 
       _ ->
         :not_a_keyword
+    end
+  end
+
+  @doc """
+  Sends `message` to each of `phones` through `SmsGateway`, logging any
+  individual failure.
+
+  Returns `:ok`, or `{:error, :all_deliveries_failed}` when there was at
+  least one number and every send failed - the shape a systemic outage
+  (the SMS provider itself down) takes, and the only case worth Oban
+  retrying the whole job for (see `AlertWorker`'s moduledoc for why a
+  handful of individual failures isn't). Shared by `AlertWorker` and
+  `ReclassificationAlertWorker` since Iteration 15, so the two can't
+  drift apart on what counts as a failed delivery.
+  """
+  def deliver_to(phones, message) when is_list(phones) and is_binary(message) do
+    results = Enum.map(phones, fn phone -> {phone, SmsGateway.send_sms(phone, message)} end)
+
+    for {phone, {:error, reason}} <- results do
+      Logger.error("Public alert SMS to #{phone} failed: #{inspect(reason)}")
+    end
+
+    if results != [] and Enum.all?(results, fn {_phone, result} -> result != :ok end) do
+      {:error, :all_deliveries_failed}
+    else
+      :ok
     end
   end
 end

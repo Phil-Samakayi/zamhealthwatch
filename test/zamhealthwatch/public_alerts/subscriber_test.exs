@@ -8,7 +8,9 @@ defmodule ZamHealthWatch.PublicAlerts.SubscriberTest do
 
   import ZamHealthWatch.CaseManagementFixtures
 
+  alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.PublicAlerts.AlertWorker
+  alias ZamHealthWatch.PublicAlerts.ReclassificationAlertWorker
   alias ZamHealthWatch.PublicAlerts.Subscriber
 
   test "enqueues an alert job when a case is reported" do
@@ -42,5 +44,45 @@ defmodule ZamHealthWatch.PublicAlerts.SubscriberTest do
 
     # Still exactly one - the status update didn't add another.
     assert [_job] = all_enqueued(worker: AlertWorker, args: %{case_id: reported_case.id})
+  end
+
+  test "enqueues a follow-up when a reported case is ruled out" do
+    pid = start_supervised!(Subscriber)
+    Ecto.Adapters.SQL.Sandbox.allow(ZamHealthWatch.Repo, self(), pid)
+
+    reported_case = case_fixture()
+    {:ok, _ruled_out} = CaseManagement.apply_lab_verdict(reported_case, :negative)
+    _ = :sys.get_state(pid)
+
+    assert_enqueued(
+      worker: ReclassificationAlertWorker,
+      args: %{case_id: reported_case.id, from: "suspected", to: "not_a_case"}
+    )
+  end
+
+  test "enqueues a correction when a ruled-out case is reinstated" do
+    pid = start_supervised!(Subscriber)
+    Ecto.Adapters.SQL.Sandbox.allow(ZamHealthWatch.Repo, self(), pid)
+
+    reported_case = case_fixture()
+    {:ok, ruled_out} = CaseManagement.apply_lab_verdict(reported_case, :negative)
+    {:ok, _confirmed} = CaseManagement.apply_lab_verdict(ruled_out, :positive)
+    _ = :sys.get_state(pid)
+
+    assert_enqueued(
+      worker: ReclassificationAlertWorker,
+      args: %{case_id: reported_case.id, from: "not_a_case", to: "confirmed"}
+    )
+  end
+
+  test "sends no follow-up when a case is simply confirmed" do
+    pid = start_supervised!(Subscriber)
+    Ecto.Adapters.SQL.Sandbox.allow(ZamHealthWatch.Repo, self(), pid)
+
+    reported_case = case_fixture()
+    {:ok, _confirmed} = CaseManagement.advance_case_status(reported_case, :health_worker)
+    _ = :sys.get_state(pid)
+
+    refute_enqueued(worker: ReclassificationAlertWorker, args: %{case_id: reported_case.id})
   end
 end

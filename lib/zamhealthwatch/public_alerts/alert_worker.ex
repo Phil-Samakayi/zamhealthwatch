@@ -42,7 +42,6 @@ defmodule ZamHealthWatch.PublicAlerts.AlertWorker do
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
   alias ZamHealthWatch.PublicAlerts
-  alias ZamHealthWatch.SmsGateway
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"case_id" => case_id}}) do
@@ -55,17 +54,7 @@ defmodule ZamHealthWatch.PublicAlerts.AlertWorker do
         "#{case_record.facility_id} (case #{case_record.id}) - notifying #{length(phones)} subscriber(s)"
     )
 
-    results = Enum.map(phones, fn phone -> {phone, SmsGateway.send_sms(phone, message)} end)
-
-    for {phone, {:error, reason}} <- results do
-      Logger.error("Public alert SMS to #{phone} failed: #{inspect(reason)}")
-    end
-
-    if results != [] and Enum.all?(results, fn {_phone, result} -> result != :ok end) do
-      {:error, :all_deliveries_failed}
-    else
-      :ok
-    end
+    PublicAlerts.deliver_to(phones, message)
   end
 
   defp alert_message(%Case{} = case_record) do
