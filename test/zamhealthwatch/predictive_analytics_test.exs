@@ -3,7 +3,7 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
 
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics
-  alias ZamHealthWatch.PredictiveAnalytics.RiskScore
+  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, RiskScore}
 
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.HospitalCapacityFixtures
@@ -126,6 +126,104 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
     end
   end
 
+  describe "list_district_risks/1" do
+    test "returns a district with no cases as insufficient_data, with no disease trends" do
+      district = district_fixture(%{name: "Quiet District"})
+      facility_fixture(%{district_id: district.id})
+
+      assert [%DistrictRisk{} = risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert risk.district_id == district.id
+      assert risk.district_name == "Quiet District"
+      assert risk.tier == :insufficient_data
+      assert risk.recent_count == 0
+      assert risk.diseases == []
+    end
+
+    test "adds up the same disease across every facility in the district" do
+      district = district_fixture()
+      clinic = facility_fixture(%{district_id: district.id})
+      hospital = facility_fixture(%{district_id: district.id})
+
+      report_disease_weeks_ago(clinic, :cholera, 1)
+      report_disease_weeks_ago(hospital, :cholera, 1)
+      report_disease_weeks_ago(hospital, :cholera, 0)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert [%DiseaseTrend{disease: :cholera} = cholera] = risk.diseases
+      assert cholera.weekly_counts == [0, 0, 2, 1]
+      assert risk.recent_count == 1
+    end
+
+    test "trends each disease separately, so a fall in one can't hide a rise in another" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+
+      # Cholera rises 1, 2, 3, 4 while malaria falls 4, 3, 2, 1. Added
+      # together that's a flat 5 a week - "stable" - which is exactly
+      # the misreading per-disease trends exist to prevent.
+      for weeks_ago <- 3..0//-1 do
+        for _n <- 1..(4 - weeks_ago), do: report_disease_weeks_ago(facility, :cholera, weeks_ago)
+        for _n <- 1..(weeks_ago + 1), do: report_disease_weeks_ago(facility, :malaria, weeks_ago)
+      end
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert risk.tier == :elevated
+      assert risk.recent_count == 5
+
+      assert [cholera, malaria] = risk.diseases
+
+      assert {cholera.disease, cholera.weekly_counts, cholera.tier} ==
+               {:cholera, [1, 2, 3, 4], :elevated}
+
+      assert {malaria.disease, malaria.weekly_counts, malaria.tier} ==
+               {:malaria, [4, 3, 2, 1], :stable}
+
+      # The per-facility read, which adds diseases together, sees no rise.
+      assert [facility_score] = PredictiveAnalytics.list_risk_scores(@now)
+      assert facility_score.weekly_counts == [5, 5, 5, 5]
+      assert facility_score.tier == :stable
+    end
+
+    test "leaves out cases at a facility with no district" do
+      district = district_fixture()
+      no_district = facility_fixture()
+      report_disease_weeks_ago(no_district, :cholera, 0)
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert risk.district_id == district.id
+      assert risk.diseases == []
+    end
+
+    test "does not count a case reported outside the four-week window" do
+      district = district_fixture()
+      facility = facility_fixture(%{district_id: district.id})
+      report_case_at(facility, DateTime.add(@now, -40, :day))
+
+      assert [risk] = PredictiveAnalytics.list_district_risks(@now)
+      assert risk.tier == :insufficient_data
+      assert risk.diseases == []
+    end
+
+    test "sorts districts most at risk first, then by this week's cases" do
+      quiet = district_fixture(%{name: "Quiet"})
+      steady = district_fixture(%{name: "Steady"})
+      rising = district_fixture(%{name: "Rising"})
+      steady_facility = facility_fixture(%{district_id: steady.id})
+      rising_facility = facility_fixture(%{district_id: rising.id})
+
+      for weeks_ago <- 3..0//-1 do
+        report_disease_weeks_ago(steady_facility, :malaria, weeks_ago)
+        report_disease_weeks_ago(steady_facility, :malaria, weeks_ago)
+
+        for _n <- 1..(4 - weeks_ago),
+            do: report_disease_weeks_ago(rising_facility, :cholera, weeks_ago)
+      end
+
+      assert PredictiveAnalytics.list_district_risks(@now) |> Enum.map(& &1.district_id) ==
+               [rising.id, steady.id, quiet.id]
+    end
+  end
+
   # weeks_ago 0 lands in the most recent 7-day bucket ("this week");
   # higher numbers land in progressively older buckets. Placed well
   # inside each bucket (mid-week) rather than right on a boundary, same
@@ -135,10 +233,14 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
     report_case_at(facility, DateTime.add(@now, -(weeks_ago * 7 + 3), :day))
   end
 
-  defp report_case_at(facility, inserted_at) do
+  defp report_disease_weeks_ago(facility, disease, weeks_ago) do
+    report_case_at(facility, DateTime.add(@now, -(weeks_ago * 7 + 3), :day), disease)
+  end
+
+  defp report_case_at(facility, inserted_at, disease \\ :malaria) do
     {:ok, case} =
       ZamHealthWatch.CaseManagement.create_case(%{
-        disease: :malaria,
+        disease: disease,
         facility_id: facility.id,
         reported_by_id: ZamHealthWatch.AccountsFixtures.user_fixture().id
       })

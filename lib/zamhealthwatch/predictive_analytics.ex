@@ -1,13 +1,23 @@
 defmodule ZamHealthWatch.PredictiveAnalytics do
   @moduledoc """
   The PredictiveAnalytics context - the brief's "district-level outbreak
-  risk scoring" module, scoped down for this first slice (full reasoning
-  in docs/ITERATIONS.md):
+  risk scoring" module. Two reads, both computed fresh on every call:
 
-    * Scored by *facility*, not district - `Facility.district_id` isn't
-      cast anywhere yet, the same gap `EpidemiologyLive.Index` and
-      `MapLive.Index` already deferred for the same reason. Nothing to
-      group by district on until that's wired.
+    * `list_district_risks/1` (Iteration 17) - the district-level read
+      the brief asks for. Each disease is trended separately within a
+      district, and the district takes its worst disease's tier. Real
+      surveillance thresholds (Zambia's IDSR, ZNPHI's district alert
+      thresholds) are per disease and per district, and adding diseases
+      together lets a rise in one hide behind a fall in another: cholera
+      going 1, 2, 3, 4 while malaria goes 4, 3, 2, 1 sums to a flat
+      5, 5, 5, 5.
+    * `list_risk_scores/1` - the original per-facility read, all
+      diseases together, with the facility's hospital capacity status
+      beside it. Kept because capacity is reported per facility and a
+      district officer still needs to see which clinic is under strain.
+
+  How both are calculated (full reasoning in docs/ITERATIONS.md):
+
     * A linear trend over the last four weeks of *case counts already
       in this system*, not a trained ML model - there's no historical
       WHO/MOH dataset loaded anywhere to train one on (the brief's own
@@ -42,10 +52,14 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
 
   alias ZamHealthWatch.{CaseManagement, Geography, HospitalCapacity}
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
-  alias ZamHealthWatch.PredictiveAnalytics.RiskScore
+  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, RiskScore}
 
   @weeks 4
   @rising_threshold 0.5
+
+  # Higher is worse. Picks a district's tier from its diseases' tiers,
+  # and sorts districts and diseases most at risk first.
+  @tier_rank %{insufficient_data: 0, stable: 1, elevated: 2}
 
   @doc """
   Returns one `RiskScore` per known facility, highest recent case count
@@ -63,7 +77,13 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
 
   """
   def list_risk_scores(now \\ DateTime.utc_now()) do
-    buckets = weekly_buckets(now)
+    buckets =
+      now
+      |> weekly_windows()
+      |> Enum.map(fn {start_dt, end_dt} ->
+        CaseManagement.count_cases_by_facility_between(start_dt, end_dt)
+      end)
+
     capacity_by_facility = HospitalCapacity.latest_capacity_by_facility()
 
     Geography.list_facilities()
@@ -75,10 +95,97 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
     |> Enum.sort_by(& &1.recent_count, :desc)
   end
 
-  # `@weeks` consecutive 7-day `%{facility_id => count}` maps ending at
-  # `now`, oldest first - e.g. for @weeks = 4, the first bucket covers
-  # 4-3 weeks ago and the last covers the most recent 7 days ("this
-  # week"). Delegates the actual counting to CaseManagement - this
+  @doc """
+  Returns one `DistrictRisk` per district, most at risk first.
+
+  Within each district, every disease with at least one case in the
+  last four weeks gets its own `DiseaseTrend` (weekly counts, slope,
+  tier), worst first. The district's tier is its worst disease's tier,
+  or `:insufficient_data` when it had no cases at all. A facility with
+  no district isn't counted in any district; it still appears in
+  `list_risk_scores/1`.
+
+  Same `now` argument as `list_risk_scores/1`, for the same reason.
+  """
+  def list_district_risks(now \\ DateTime.utc_now()) do
+    district_by_facility =
+      Geography.list_facilities()
+      |> Enum.reject(&is_nil(&1.district_id))
+      |> Map.new(&{&1.id, &1.district_id})
+
+    buckets =
+      now
+      |> weekly_windows()
+      |> Enum.map(fn {start_dt, end_dt} ->
+        start_dt
+        |> CaseManagement.count_cases_by_facility_and_disease_between(end_dt)
+        |> by_district_and_disease(district_by_facility)
+      end)
+
+    Geography.list_districts()
+    |> Enum.map(&build_district_risk(&1, buckets))
+    |> Enum.sort_by(&{-Map.fetch!(@tier_rank, &1.tier), -&1.recent_count, &1.district_name})
+  end
+
+  # Folds `%{{facility_id, disease} => count}` into
+  # `%{{district_id, disease} => count}`, dropping facilities with no
+  # district.
+  defp by_district_and_disease(counts, district_by_facility) do
+    Enum.reduce(counts, %{}, fn {{facility_id, disease}, count}, acc ->
+      case Map.fetch(district_by_facility, facility_id) do
+        {:ok, district_id} -> Map.update(acc, {district_id, disease}, count, &(&1 + count))
+        :error -> acc
+      end
+    end)
+  end
+
+  defp build_district_risk(district, buckets) do
+    diseases =
+      buckets
+      |> Enum.flat_map(&Map.keys/1)
+      |> Enum.filter(fn {district_id, _disease} -> district_id == district.id end)
+      |> Enum.map(fn {_district_id, disease} -> disease end)
+      |> Enum.uniq()
+      |> Enum.map(fn disease ->
+        counts = Enum.map(buckets, &Map.get(&1, {district.id, disease}, 0))
+        build_disease_trend(disease, counts)
+      end)
+      |> Enum.sort_by(
+        &{-Map.fetch!(@tier_rank, &1.tier), -&1.recent_count, -&1.trend_slope, &1.disease}
+      )
+
+    %DistrictRisk{
+      district_id: district.id,
+      district_name: district.name,
+      province: district.province,
+      recent_count: diseases |> Enum.map(& &1.recent_count) |> Enum.sum(),
+      tier: worst_tier(diseases),
+      diseases: diseases
+    }
+  end
+
+  # `diseases` is already sorted worst first. Every disease in it had at
+  # least one case in the window, so none is :insufficient_data - only a
+  # district with no diseases at all is.
+  defp worst_tier([]), do: :insufficient_data
+  defp worst_tier([worst | _rest]), do: worst.tier
+
+  defp build_disease_trend(disease, counts) do
+    slope = trend_slope(counts)
+
+    %DiseaseTrend{
+      disease: disease,
+      weekly_counts: counts,
+      recent_count: List.last(counts),
+      trend_slope: slope,
+      tier: tier_for(counts, slope)
+    }
+  end
+
+  # `@weeks` consecutive 7-day `{start, end}` windows ending at `now`,
+  # oldest first - e.g. for @weeks = 4, the first covers 4-3 weeks ago
+  # and the last covers the most recent 7 days ("this week"). Each read
+  # above asks CaseManagement to count inside these windows - this
   # context only ever asks it "how many, in this window".
   #
   # `now` is padded forward to the next whole second before any bucket
@@ -92,13 +199,11 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   # "less than" - silently dropping a just-reported case from its own
   # "this week" bucket. A full second of padding closes that race
   # without touching count_cases_by_facility_between/2's semantics.
-  defp weekly_buckets(now) do
+  defp weekly_windows(now) do
     now = now |> DateTime.truncate(:second) |> DateTime.add(1, :second)
 
     for weeks_ago <- (@weeks - 1)..0//-1 do
-      start_dt = DateTime.add(now, -(weeks_ago + 1) * 7, :day)
-      end_dt = DateTime.add(now, -weeks_ago * 7, :day)
-      CaseManagement.count_cases_by_facility_between(start_dt, end_dt)
+      {DateTime.add(now, -(weeks_ago + 1) * 7, :day), DateTime.add(now, -weeks_ago * 7, :day)}
     end
   end
 
