@@ -211,4 +211,225 @@ defmodule ZamHealthWatch.LabReportingTest do
       refute LabReporting.can_record_results?(nil)
     end
   end
+
+  describe "correct_result/4" do
+    setup do
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+      case_record = case_fixture()
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, issued} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      %{lab_officer: lab_officer, case_record: case_record, issued: issued}
+    end
+
+    test "replaces the result, keeps the original in the history, and reclassifies the case", %{
+      lab_officer: lab_officer,
+      case_record: case_record,
+      issued: issued
+    } do
+      assert CaseManagement.get_case!(case_record.id).status == :confirmed
+
+      assert {:ok, corrected} =
+               LabReporting.correct_result(
+                 issued,
+                 :negative,
+                 "Repeat test on a fresh sample was negative.",
+                 lab_officer
+               )
+
+      assert corrected.status == :corrected
+      assert corrected.result == :negative
+      # Who issued the original result, and when, are left as they were.
+      assert corrected.resulted_by_id == lab_officer.id
+      assert corrected.resulted_at == issued.resulted_at
+
+      assert [correction] = LabReporting.list_corrections_for_lab_test(issued.id)
+      assert correction.kind == :corrected
+      assert correction.previous_result == :positive
+      assert correction.new_result == :negative
+      assert correction.reason == "Repeat test on a fresh sample was negative."
+      assert correction.corrected_by_id == lab_officer.id
+
+      assert CaseManagement.get_case!(case_record.id).status == :not_a_case
+    end
+
+    test "can be corrected again, and the history keeps every step in order", %{
+      lab_officer: lab_officer,
+      issued: issued
+    } do
+      {:ok, once} =
+        LabReporting.correct_result(issued, :negative, "First repeat test negative.", lab_officer)
+
+      {:ok, _twice} =
+        LabReporting.correct_result(
+          once,
+          :inconclusive,
+          "Second repeat test was indeterminate.",
+          lab_officer
+        )
+
+      assert [first, second] = LabReporting.list_corrections_for_lab_test(issued.id)
+      assert {first.previous_result, first.new_result} == {:positive, :negative}
+      assert {second.previous_result, second.new_result} == {:negative, :inconclusive}
+    end
+
+    test "an MOH admin can correct a result too", %{issued: issued} do
+      admin = user_fixture() |> set_role(:moh_admin)
+
+      assert {:ok, _} =
+               LabReporting.correct_result(issued, :negative, "Corrected after lab audit.", admin)
+    end
+
+    test "refuses every other role", %{issued: issued} do
+      for role <- [:health_worker, :district_officer] do
+        user = user_fixture() |> set_role(role)
+
+        assert LabReporting.correct_result(issued, :negative, "A long enough reason.", user) ==
+                 {:error, :unauthorized}
+      end
+
+      assert LabReporting.list_corrections_for_lab_test(issued.id) == []
+    end
+
+    test "requires a reason of at least 10 characters, and changes nothing without one", %{
+      lab_officer: lab_officer,
+      case_record: case_record,
+      issued: issued
+    } do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               LabReporting.correct_result(issued, :negative, "  wrong  ", lab_officer)
+
+      assert %{reason: [_too_short]} = errors_on(changeset)
+      assert LabReporting.get_lab_test!(issued.id).result == :positive
+      assert LabReporting.list_corrections_for_lab_test(issued.id) == []
+      assert CaseManagement.get_case!(case_record.id).status == :confirmed
+    end
+
+    test "refuses a correction to the result the test already has", %{
+      lab_officer: lab_officer,
+      issued: issued
+    } do
+      assert LabReporting.correct_result(issued, :positive, "Same result again.", lab_officer) ==
+               {:error, :unchanged}
+    end
+
+    test "refuses to correct a test with no issued result", %{lab_officer: lab_officer} do
+      pending = lab_test_fixture()
+
+      assert LabReporting.correct_result(pending, :negative, "Nothing to correct.", lab_officer) ==
+               {:error, :not_correctable}
+    end
+
+    test "broadcasts the corrected test", %{lab_officer: lab_officer, issued: issued} do
+      LabReporting.subscribe_lab_tests()
+
+      {:ok, corrected} =
+        LabReporting.correct_result(issued, :negative, "Repeat test negative.", lab_officer)
+
+      assert_receive {:updated, ^corrected}
+    end
+
+    test "a positive on another of the case's tests still confirms it", %{
+      lab_officer: lab_officer,
+      case_record: case_record,
+      issued: issued
+    } do
+      other = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, _} = LabReporting.record_result(other, :positive, lab_officer)
+
+      {:ok, _} = LabReporting.correct_result(issued, :negative, "Repeat test negative.", lab_officer)
+
+      assert CaseManagement.get_case!(case_record.id).status == :confirmed
+    end
+  end
+
+  describe "withdraw_result/3" do
+    setup do
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+      case_record = case_fixture()
+      lab_test = lab_test_fixture(%{case_id: case_record.id})
+      {:ok, issued} = LabReporting.record_result(lab_test, :positive, lab_officer)
+
+      %{lab_officer: lab_officer, case_record: case_record, issued: issued}
+    end
+
+    test "withdraws the result, records why, and returns the case to suspected", %{
+      lab_officer: lab_officer,
+      case_record: case_record,
+      issued: issued
+    } do
+      assert {:ok, withdrawn} =
+               LabReporting.withdraw_result(issued, "Entered against the wrong case.", lab_officer)
+
+      assert withdrawn.status == :entered_in_error
+      # Kept, so the screen can still show what was withdrawn.
+      assert withdrawn.result == :positive
+
+      assert [correction] = LabReporting.list_corrections_for_lab_test(issued.id)
+      assert correction.kind == :entered_in_error
+      assert correction.previous_result == :positive
+      assert correction.new_result == nil
+
+      assert CaseManagement.get_case!(case_record.id).status == :suspected
+    end
+
+    test "keeps a clinical confirmation when the lab's positive is withdrawn", %{
+      lab_officer: lab_officer,
+      case_record: case_record,
+      issued: issued
+    } do
+      # Confirmed clinically before the result came in.
+      ZamHealthWatch.Repo.update!(
+        Ecto.Changeset.change(CaseManagement.get_case!(case_record.id),
+          clinically_confirmed_at: DateTime.utc_now(:second)
+        )
+      )
+
+      {:ok, _} = LabReporting.withdraw_result(issued, "Entered against the wrong case.", lab_officer)
+
+      assert CaseManagement.get_case!(case_record.id).status == :confirmed
+    end
+
+    test "a withdrawn result can't be corrected or withdrawn again", %{
+      lab_officer: lab_officer,
+      issued: issued
+    } do
+      {:ok, withdrawn} =
+        LabReporting.withdraw_result(issued, "Entered against the wrong case.", lab_officer)
+
+      assert LabReporting.correct_result(withdrawn, :negative, "Trying anyway.", lab_officer) ==
+               {:error, :not_correctable}
+
+      assert LabReporting.withdraw_result(withdrawn, "Trying again anyway.", lab_officer) ==
+               {:error, :not_correctable}
+    end
+
+    test "refuses roles that can't correct results", %{issued: issued} do
+      user = user_fixture() |> set_role(:district_officer)
+
+      assert LabReporting.withdraw_result(issued, "A long enough reason.", user) ==
+               {:error, :unauthorized}
+    end
+  end
+
+  describe "can_correct_results?/1" do
+    test "is true for lab officers and MOH admins only" do
+      assert LabReporting.can_correct_results?(:lab_officer)
+      assert LabReporting.can_correct_results?(:moh_admin)
+      refute LabReporting.can_correct_results?(:district_officer)
+      refute LabReporting.can_correct_results?(:health_worker)
+      refute LabReporting.can_correct_results?(nil)
+    end
+  end
+
+  describe "record_result/3 on a corrected or withdrawn test" do
+    test "is refused - a result is issued once, then only corrected" do
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+      {:ok, issued} = LabReporting.record_result(lab_test_fixture(), :positive, lab_officer)
+      {:ok, corrected} = LabReporting.correct_result(issued, :negative, "Repeat negative.", lab_officer)
+
+      assert LabReporting.record_result(corrected, :positive, lab_officer) ==
+               {:error, :already_resulted}
+    end
+  end
 end

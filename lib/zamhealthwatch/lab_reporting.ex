@@ -8,11 +8,12 @@ defmodule ZamHealthWatch.LabReporting do
   confirms or downgrades surveillance signals"). A separate context
   from `CaseManagement`, not folded into it the way Disease
   Surveillance's aggregates were in Iteration 1 - a lab test is a
-  genuinely distinct entity with its own two-state lifecycle
-  (`:pending` -> `:resulted`, separate from a case's own
-  classification), not just another query over the `cases` table. `CaseManagement` doesn't know this context
-  exists; `LabReporting` depends on `CaseManagement`'s public API
-  (`get_case!/1`, `update_case_status/2`) in one direction only, the
+  genuinely distinct entity with its own lifecycle (`:pending` ->
+  `:resulted`, and since Iteration 15 `:corrected` or
+  `:entered_in_error`), separate from a case's own classification, not
+  just another query over the `cases` table. `CaseManagement` doesn't
+  know this context exists; `LabReporting` depends on `CaseManagement`'s
+  public API (`get_case!/1`, `apply_lab_verdict/2`) in one direction only, the
   same direction `PredictiveAnalytics` already depends on it and
   `Geography`.
 
@@ -29,6 +30,7 @@ defmodule ZamHealthWatch.LabReporting do
   alias ZamHealthWatch.Repo
 
   alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.LabReporting.LabResultCorrection
   alias ZamHealthWatch.LabReporting.LabTest
 
   @doc """
@@ -42,8 +44,8 @@ defmodule ZamHealthWatch.LabReporting do
   A separate `"lab_tests"` topic, not reused from `CaseManagement`'s
   `"cases"` one - the same "each context broadcasts on its own topic"
   precedent `Geography`'s `"districts"`/`"facilities"` topics already
-  set. `record_result/3`'s own side effect on the linked case still
-  goes out on `"cases"` too, via `CaseManagement.update_case_status/2`
+  set. A result's effect on the linked case still goes out on
+  `"cases"` too, via `CaseManagement.apply_lab_verdict/2`
   itself - nothing extra is needed here for that to reach the other
   LiveViews already subscribed to it.
   """
@@ -192,29 +194,16 @@ defmodule ZamHealthWatch.LabReporting do
   The recorder's id is stored as `resulted_by_id`, so every new result
   says who entered it.
 
-  What a result does to the linked case (Information Expert: this
-  context, not `CaseManagement`, knows what a lab result *means* for
-  surveillance purposes, the same division of labour `PredictiveAnalytics`
-  already draws for what a case-count trend means):
-
-    * `:positive` confirms the signal - the case moves to `:confirmed`.
-    * `:negative` rules it out - the case moves to `:not_a_case`. Until
-      Iteration 15 this set `:resolved`, which also meant "recovered";
-      a negative result means the patient never had the disease, so it
-      now has its own classification (see `Case`'s `status` field).
-    * `:inconclusive` changes nothing - "we don't know yet" isn't a
-      real signal either way.
-
-  Applied unconditionally via `CaseManagement.update_case_status/2`,
-  regardless of the case's current status - the same "no stricter
-  transition rule than the data layer already allows" call Iteration 1
-  made for `Case.status_changeset/2` itself. A result landing on a
-  case already classified some other way (e.g. a positive on a case an
-  earlier test ruled out) reclassifies it rather than being silently
-  ignored - there's no real second-order use case yet deciding
-  what *should* happen in that narrower situation, so a more careful
-  rule isn't guessed at here. Logged as a known, deliberate limitation,
-  not silently attempted.
+  What a result does to the linked case is decided here, not in
+  `CaseManagement` (Information Expert: this context knows what a lab
+  result *means* for surveillance). Since Iteration 15 the case's
+  classification is recalculated from *all* of its current results
+  rather than pushed by this one result alone - see `lab_verdict/1` and
+  `CaseManagement.classification_for/2`. For a case's first result the
+  effect is the familiar one: positive confirms, negative rules it out,
+  inconclusive leaves a suspected case suspected. Recalculating instead
+  of pushing is what lets a later correction or withdrawal flow through
+  correctly.
 
   ## Examples
 
@@ -233,32 +222,170 @@ defmodule ZamHealthWatch.LabReporting do
       not can_record_results?(role) ->
         {:error, :unauthorized}
 
-      lab_test.status == :resulted ->
+      lab_test.status != :pending ->
         {:error, :already_resulted}
 
       true ->
-        with {:ok, updated} <-
-               lab_test
-               |> LabTest.result_changeset(%{result: result, resulted_by_id: recorder_id})
-               |> Repo.update() do
-          broadcast_lab_test({:updated, updated})
-          apply_result_to_case(updated)
-          {:ok, updated}
-        end
+        lab_test
+        |> LabTest.result_changeset(%{result: result, resulted_by_id: recorder_id})
+        |> Repo.update()
+        |> after_result_change()
     end
   end
 
-  defp apply_result_to_case(%LabTest{result: :positive, case_id: case_id}) do
-    case_id
-    |> CaseManagement.get_case!()
-    |> CaseManagement.update_case_status(%{status: :confirmed})
+  @correction_roles [:lab_officer, :moh_admin]
+
+  @doc """
+  Returns `true` if a user holding `role` may correct or withdraw an
+  issued lab result.
+
+  Lab officers (the people who issue results) and MOH admins (oversight,
+  for when the lab itself can't). Narrower than "anyone with a role" on
+  purpose: a correction changes a case's classification for everyone,
+  so it needs the same authority as issuing the result in the first
+  place.
+  """
+  def can_correct_results?(role), do: role in @correction_roles
+
+  @doc """
+  Replaces an issued result with a corrected one, on behalf of
+  `corrector` (any map with `:id` and `:role`), with a required
+  `reason`.
+
+  The previous result isn't lost: a `LabResultCorrection` row records
+  what it was, what it became, why, who, and when, in the same
+  transaction as the change itself. Corrections can be corrected again;
+  each one adds to the history. The linked case's classification is
+  recalculated afterwards.
+
+  Refused when the corrector can't correct results (`:unauthorized`),
+  the test has no issued result to correct - pending, or already
+  withdrawn (`:not_correctable`) - or the "correction" is the result it
+  already has (`:unchanged`). A missing or too-short reason comes back
+  as `{:error, %Ecto.Changeset{}}`.
+  """
+  def correct_result(%LabTest{} = lab_test, new_result, reason, %{id: corrector_id, role: role}) do
+    cond do
+      not can_correct_results?(role) ->
+        {:error, :unauthorized}
+
+      lab_test.status not in [:resulted, :corrected] ->
+        {:error, :not_correctable}
+
+      new_result == lab_test.result ->
+        {:error, :unchanged}
+
+      true ->
+        Repo.transact(fn ->
+          with {:ok, _correction} <-
+                 insert_correction(lab_test, :corrected, new_result, reason, corrector_id) do
+            lab_test
+            |> LabTest.correction_changeset(%{result: new_result})
+            |> Repo.update()
+          end
+        end)
+        |> after_result_change()
+    end
   end
 
-  defp apply_result_to_case(%LabTest{result: :negative, case_id: case_id}) do
-    case_id
-    |> CaseManagement.get_case!()
-    |> CaseManagement.update_case_status(%{status: :not_a_case})
+  @doc """
+  Withdraws an issued result as entered in error, on behalf of
+  `corrector`, with a required `reason` - for a result that should
+  never have been recorded against this test at all (entered on the
+  wrong case, say), as opposed to one that was simply wrong.
+
+  The result stays visible but marked withdrawn, stops counting towards
+  the case's classification, and can't be corrected afterwards - if
+  the test was really done, request it again. Same refusals as
+  `correct_result/4`, minus `:unchanged`.
+  """
+  def withdraw_result(%LabTest{} = lab_test, reason, %{id: corrector_id, role: role}) do
+    cond do
+      not can_correct_results?(role) ->
+        {:error, :unauthorized}
+
+      lab_test.status not in [:resulted, :corrected] ->
+        {:error, :not_correctable}
+
+      true ->
+        Repo.transact(fn ->
+          with {:ok, _correction} <-
+                 insert_correction(lab_test, :entered_in_error, nil, reason, corrector_id) do
+            lab_test
+            |> LabTest.withdrawal_changeset()
+            |> Repo.update()
+          end
+        end)
+        |> after_result_change()
+    end
   end
 
-  defp apply_result_to_case(%LabTest{result: :inconclusive}), do: :ok
+  @doc """
+  Returns every correction and withdrawal, newest first - the history
+  `LabLive.Index` shows under its table.
+  """
+  def list_corrections do
+    Repo.all(from c in LabResultCorrection, order_by: [desc: c.inserted_at])
+  end
+
+  @doc """
+  Returns a lab test's own correction history, oldest first - the order
+  it happened in. The first entry's `previous_result` is the result as
+  originally issued.
+  """
+  def list_corrections_for_lab_test(lab_test_id) do
+    Repo.all(
+      from c in LabResultCorrection,
+        where: c.lab_test_id == ^lab_test_id,
+        order_by: [asc: c.inserted_at]
+    )
+  end
+
+  defp insert_correction(%LabTest{} = lab_test, kind, new_result, reason, corrector_id) do
+    %LabResultCorrection{}
+    |> LabResultCorrection.changeset(%{
+      kind: kind,
+      previous_result: lab_test.result,
+      new_result: new_result,
+      reason: reason,
+      lab_test_id: lab_test.id,
+      corrected_by_id: corrector_id
+    })
+    |> Repo.insert()
+  end
+
+  # Shared tail of every operation that changes what a test's result
+  # is: broadcast the updated test, then recalculate the linked case's
+  # classification from all of its current results.
+  defp after_result_change({:ok, %LabTest{} = updated}) do
+    broadcast_lab_test({:updated, updated})
+
+    {:ok, _case} =
+      updated.case_id
+      |> CaseManagement.get_case!()
+      |> CaseManagement.apply_lab_verdict(lab_verdict(updated.case_id))
+
+    {:ok, updated}
+  end
+
+  defp after_result_change(error), do: error
+
+  # What a case's *current* results say, as the verdict
+  # CaseManagement.classification_for/2 takes: any positive wins, then
+  # any negative, otherwise nothing conclusive. Pending tests have no
+  # result yet, and withdrawn ones no longer count.
+  defp lab_verdict(case_id) do
+    results =
+      Repo.all(
+        from t in LabTest,
+          where: t.case_id == ^case_id and t.status in [:resulted, :corrected],
+          select: t.result
+      )
+
+    cond do
+      :positive in results -> :positive
+      :negative in results -> :negative
+      true -> :none
+    end
+  end
 end

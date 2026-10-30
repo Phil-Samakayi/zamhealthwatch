@@ -5,7 +5,14 @@ defmodule ZamHealthWatch.LabReporting.LabTest do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "lab_tests" do
-    field :status, Ecto.Enum, values: [:pending, :resulted], default: :pending
+    # `:corrected` and `:entered_in_error` (Iteration 15) follow FHIR's
+    # report statuses: a result issued and later fixed, and a result
+    # withdrawn because it should never have been recorded. The history
+    # behind either is in `LabReporting.LabResultCorrection`.
+    field :status, Ecto.Enum,
+      values: [:pending, :resulted, :corrected, :entered_in_error],
+      default: :pending
+
     field :result, Ecto.Enum, values: [:positive, :negative, :inconclusive]
     field :resulted_at, :utc_datetime
     field :case_id, :binary_id
@@ -59,5 +66,29 @@ defmodule ZamHealthWatch.LabReporting.LabTest do
     |> foreign_key_constraint(:resulted_by_id)
     |> put_change(:status, :resulted)
     |> put_change(:resulted_at, DateTime.utc_now(:second))
+  end
+
+  @doc """
+  A lab test changeset for replacing an issued result with a corrected
+  one. Sets `status` to `:corrected`. `resulted_at`/`resulted_by_id`
+  are left alone on purpose: they still say when and by whom the
+  original result was issued, and the correction itself is recorded in
+  `LabReporting.LabResultCorrection`.
+  """
+  def correction_changeset(lab_test, attrs) do
+    lab_test
+    |> cast(attrs, [:result])
+    |> validate_required([:result])
+    |> put_change(:status, :corrected)
+  end
+
+  @doc """
+  A lab test changeset for withdrawing an issued result as entered in
+  error. `result` is kept rather than cleared, so the screen can still
+  show what was withdrawn - a withdrawn result simply stops counting
+  towards the case's classification.
+  """
+  def withdrawal_changeset(lab_test) do
+    change(lab_test, status: :entered_in_error)
   end
 end
