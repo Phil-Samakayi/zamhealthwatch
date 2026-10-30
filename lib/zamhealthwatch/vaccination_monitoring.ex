@@ -19,15 +19,11 @@ defmodule ZamHealthWatch.VaccinationMonitoring do
       it doesn't. No editing/deletion yet, same "no rule guessed at
       without a real use case" reasoning applied everywhere else in this
       project.
-    * The brief also says this module "feeds risk scoring" - deliberately
-      **not** wired into `PredictiveAnalytics` this slice.
-      `PredictiveAnalytics.list_risk_scores/1` is scored per *facility*
-      today, while this module reports per *district* - blending the two
-      needs `PredictiveAnalytics` itself to move to district-level
-      scoring first (real, separate work, though `Facility.district_id`
-      being castable now finally unblocks it), not a quick bolt-on here.
-      Logged as the natural next iteration once this slice is stable,
-      not silently dropped.
+    * The brief also says this module "feeds risk scoring". It does as
+      of Iteration 17: `PredictiveAnalytics.list_district_risks/1` reads
+      each district's latest coverage through
+      `latest_coverage_by_district/1`. Deferred until then because risk
+      was scored per facility and coverage is per district.
 
   Depends on `Geography` (a record's `district_id`) and `Accounts` (its
   `reported_by_id`) the same decoupled way `CaseManagement` and
@@ -100,6 +96,33 @@ defmodule ZamHealthWatch.VaccinationMonitoring do
         where: v.district_id == ^district_id,
         order_by: [desc: v.inserted_at]
     )
+  end
+
+  @doc """
+  Returns the most recently reported record for `antigen` in each
+  district that has one, as `%{district_id => VaccinationRecord}`.
+
+  Built for `PredictiveAnalytics.list_district_risks/1` (Iteration 17).
+  "Latest" is by report time, whatever the campaign: a newer submission
+  is this system's current figure for that district, the same way
+  `HospitalCapacity.latest_capacity_by_facility/0` treats capacity. A
+  district with no record for the antigen is simply absent - the caller
+  decides what "no data" means.
+
+  ## Examples
+
+      iex> latest_coverage_by_district(:measles_rubella)
+      %{"district-uuid" => %VaccinationRecord{}}
+
+  """
+  def latest_coverage_by_district(antigen) do
+    Repo.all(
+      from v in VaccinationRecord,
+        where: v.antigen == ^antigen,
+        distinct: v.district_id,
+        order_by: [asc: v.district_id, desc: v.inserted_at]
+    )
+    |> Map.new(&{&1.district_id, &1})
   end
 
   @doc """

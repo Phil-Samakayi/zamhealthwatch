@@ -39,6 +39,41 @@ defmodule ZamHealthWatch.VaccinationMonitoringTest do
     end
   end
 
+  describe "latest_coverage_by_district/1" do
+    test "returns the most recently reported record for the antigen in each district" do
+      lusaka = district_fixture(%{name: "Lusaka"})
+      monze = district_fixture(%{name: "Monze"})
+
+      older = vaccination_record_fixture(%{district_id: lusaka.id, doses_administered: 50})
+      backdate(older, -60)
+      newer = vaccination_record_fixture(%{district_id: lusaka.id, doses_administered: 90})
+      monze_record = vaccination_record_fixture(%{district_id: monze.id})
+
+      latest = VaccinationMonitoring.latest_coverage_by_district(:measles_rubella)
+
+      assert map_size(latest) == 2
+      assert latest[lusaka.id].id == newer.id
+      assert latest[monze.id].id == monze_record.id
+    end
+
+    test "ignores other antigens and leaves out districts with no record" do
+      district = district_fixture()
+      _empty_district = district_fixture()
+      vaccination_record_fixture(%{district_id: district.id, antigen: :opv})
+
+      assert VaccinationMonitoring.latest_coverage_by_district(:measles_rubella) == %{}
+      assert [_opv] = Map.values(VaccinationMonitoring.latest_coverage_by_district(:opv))
+    end
+  end
+
+  defp backdate(record, seconds) do
+    record
+    |> Ecto.Changeset.change(
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(seconds)
+    )
+    |> ZamHealthWatch.Repo.update!()
+  end
+
   describe "get_vaccination_record!/1" do
     test "raises if id is invalid" do
       assert_raise Ecto.NoResultsError, fn ->
