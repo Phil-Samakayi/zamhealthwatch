@@ -6,6 +6,8 @@ defmodule ZamHealthWatchWeb.PageControllerTest do
   alias ZamHealthWatch.Demo
 
   describe "GET /" do
+    setup :restore_reset_flag
+
     test "lists every demo account and the shared password when logged out", %{conn: conn} do
       html = conn |> get(~p"/") |> html_response(200)
 
@@ -41,5 +43,33 @@ defmodule ZamHealthWatchWeb.PageControllerTest do
       assert html =~ "National report"
       assert html =~ ~p"/admin/users"
     end
+
+    test "says the demo data resets when the deployment resets it on boot", %{conn: conn} do
+      Application.put_env(:zamhealthwatch, :demo_reset_on_boot, true)
+
+      html = conn |> get(~p"/") |> html_response(200)
+      assert html =~ ~s(id="demo-reset-notice")
+      assert html =~ "feel free to change anything"
+    end
+
+    test "doesn't mention a data reset when the deployment doesn't do one", %{conn: conn} do
+      Application.put_env(:zamhealthwatch, :demo_reset_on_boot, false)
+
+      html = conn |> get(~p"/") |> html_response(200)
+      refute html =~ ~s(id="demo-reset-notice")
+    end
+  end
+
+  # Same helper as DemoTest's: the flag is global application config, so
+  # put back whatever config/runtime.exs set. This module isn't async.
+  defp restore_reset_flag(_context) do
+    original = Application.fetch_env(:zamhealthwatch, :demo_reset_on_boot)
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:zamhealthwatch, :demo_reset_on_boot, value)
+        :error -> Application.delete_env(:zamhealthwatch, :demo_reset_on_boot)
+      end
+    end)
   end
 end
