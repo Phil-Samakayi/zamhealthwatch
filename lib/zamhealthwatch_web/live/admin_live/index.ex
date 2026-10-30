@@ -29,7 +29,7 @@ defmodule ZamHealthWatchWeb.AdminLive.Index do
           Assign a role - and, for a health worker, optionally a facility - to every
           registered user. A user with no role assigned can still log in and report
           cases, but can't use anything role-gated yet (see the case list's
-          Confirm/Resolve actions).
+          Confirm and outcome actions).
         </:subtitle>
       </.header>
 

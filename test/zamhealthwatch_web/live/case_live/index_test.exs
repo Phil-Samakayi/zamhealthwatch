@@ -282,7 +282,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       assert has_element?(lv, row_selector(case) <> " button", "Confirm")
     end
 
-    test "shows a Resolve button for a confirmed case when the user has a role", %{
+    test "shows outcome buttons but no Confirm for a confirmed case when the user has a role", %{
       conn: conn,
       facility: facility
     } do
@@ -302,17 +302,17 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       # page-wide `has_element?(lv, "button", "Confirm")` would trip on
       # one of theirs exactly the way an unscoped `html =~ "Confirm"`
       # substring check trips on this row's own "Confirmed" badge text.
-      assert has_element?(lv, row_selector(case) <> " button", "Resolve")
+      assert has_element?(lv, row_selector(case) <> " button", "Recovered")
+      assert has_element?(lv, row_selector(case) <> " button", "Died")
       refute has_element?(lv, row_selector(case) <> " button", "Confirm")
     end
 
-    test "shows no action button for a resolved case, even with a role assigned", %{
+    test "shows no action button for a case ruled out by the lab, even with a role assigned", %{
       conn: conn,
       facility: facility
     } do
       case = case_fixture(%{facility_id: facility.id})
-      {:ok, case} = CaseManagement.update_case_status(case, %{status: :confirmed})
-      {:ok, case} = CaseManagement.update_case_status(case, %{status: :resolved})
+      {:ok, case} = CaseManagement.update_case_status(case, %{status: :not_a_case})
       user = user_fixture() |> set_role(:moh_admin)
 
       {:ok, lv, _html} =
@@ -348,7 +348,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       # process's mailbox by the time this call reaches it - the same
       # ordering the "broadcasts a newly reported case to other viewers
       # live" test above relies on with a second `render/1` call.
-      assert has_element?(lv, row_selector(case) <> " button", "Resolve")
+      refute has_element?(lv, row_selector(case) <> " button", "Confirm")
       assert CaseManagement.get_case!(case.id).status == :confirmed
     end
 
@@ -373,14 +373,13 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       assert CaseManagement.get_case!(case.id).status == :suspected
     end
 
-    test "a forged advance_status event on an already-resolved case is rejected", %{
+    test "a forged advance_status event on an already-confirmed case is rejected", %{
       conn: conn,
       facility: facility
     } do
       case = case_fixture(%{facility_id: facility.id})
       {:ok, case} = CaseManagement.update_case_status(case, %{status: :confirmed})
-      {:ok, case} = CaseManagement.update_case_status(case, %{status: :resolved})
-      user = user_fixture() |> set_role(:health_worker)
+      user = user_fixture() |> set_role(:district_officer)
 
       {:ok, lv, _html} =
         conn
@@ -390,7 +389,64 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
       result = render_click(lv, "advance_status", %{"id" => case.id})
 
       assert result =~ "This case has no further status to move to."
-      assert CaseManagement.get_case!(case.id).status == :resolved
+      assert CaseManagement.get_case!(case.id).status == :confirmed
+    end
+
+    test "clicking Recovered records the outcome and removes the outcome buttons", %{
+      conn: conn,
+      facility: facility
+    } do
+      case = case_fixture(%{facility_id: facility.id})
+      {:ok, case} = CaseManagement.update_case_status(case, %{status: :confirmed})
+      user = user_fixture() |> set_role(:district_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      result = lv |> element(row_selector(case) <> " button", "Recovered") |> render_click()
+
+      assert result =~ "Outcome recorded: Recovered."
+      assert CaseManagement.get_case!(case.id).outcome == :recovered
+      refute has_element?(lv, row_selector(case) <> " button", "Died")
+    end
+
+    test "a forged record_outcome event with an unrecognized value is rejected gracefully", %{
+      conn: conn,
+      facility: facility
+    } do
+      case = case_fixture(%{facility_id: facility.id})
+      user = user_fixture() |> set_role(:district_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      result = render_click(lv, "record_outcome", %{"id" => case.id, "outcome" => "hacked"})
+
+      assert result =~ "Unrecognized outcome."
+      assert CaseManagement.get_case!(case.id).outcome == nil
+    end
+
+    test "a forged record_outcome event on a ruled-out case is rejected", %{
+      conn: conn,
+      facility: facility
+    } do
+      case = case_fixture(%{facility_id: facility.id})
+      {:ok, case} = CaseManagement.update_case_status(case, %{status: :not_a_case})
+      user = user_fixture() |> set_role(:district_officer)
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/cases")
+
+      result = render_click(lv, "record_outcome", %{"id" => case.id, "outcome" => "died"})
+
+      assert result =~ "This case was ruled out"
+      assert CaseManagement.get_case!(case.id).outcome == nil
     end
 
     # Scopes an assertion to one case's own table row. `async: true` means

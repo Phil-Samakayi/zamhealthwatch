@@ -6,6 +6,11 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.Geography
 
+  # Since Iteration 15, closing a case means recording what happened to
+  # the patient, not moving it to a "resolved" classification - see
+  # Case's `outcome` field.
+  @outcome_options [{"Recovered", :recovered}, {"Died", :died}]
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -84,16 +89,33 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
             {Phoenix.Naming.humanize(entry.status)}
           </span>
         </:col>
+        <:col :let={{_id, entry}} label="Outcome">
+          <span :if={entry.outcome} class={["badge", outcome_badge_class(entry.outcome)]}>
+            {Phoenix.Naming.humanize(entry.outcome)}
+          </span>
+        </:col>
         <:col :let={{_id, entry}} label="Reported">{time_ago(entry.inserted_at)}</:col>
         <:col :let={{_id, entry}} label="Actions">
-          <.button
-            :if={can_advance_status?(@current_scope, entry.status)}
-            class="btn btn-xs"
-            phx-click="advance_status"
-            phx-value-id={entry.id}
-          >
-            {advance_label(entry.status)}
-          </.button>
+          <div class="flex flex-wrap gap-1">
+            <.button
+              :if={can_advance_status?(@current_scope, entry.status)}
+              class="btn btn-xs"
+              phx-click="advance_status"
+              phx-value-id={entry.id}
+            >
+              Confirm
+            </.button>
+            <.button
+              :for={{label, outcome} <- @outcome_options}
+              :if={can_record_outcome?(@current_scope, entry)}
+              class="btn btn-xs"
+              phx-click="record_outcome"
+              phx-value-id={entry.id}
+              phx-value-outcome={outcome}
+            >
+              {label}
+            </.button>
+          </div>
         </:col>
       </.table>
     </Layouts.app>
@@ -113,6 +135,7 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
       |> assign(:scope, scope)
       |> assign(:locked_facility, locked_facility(scope))
       |> assign(:disease_options, Case.disease_options())
+      |> assign(:outcome_options, @outcome_options)
       |> assign(:facility_options, Enum.map(facilities, &{&1.name, &1.id}))
       |> assign(:facilities_by_id, Map.new(facilities, &{&1.id, &1.name}))
       |> assign(:reporters_by_id, Map.new(Accounts.list_users(), &{&1.id, reporter_label(&1)}))
@@ -224,6 +247,40 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
     end
   end
 
+  # Same server-side re-check shape as "advance_status" above -
+  # CaseManagement.record_outcome/3 enforces role, classification, and
+  # "not already recorded" itself. `outcome` goes through to_outcome/1
+  # rather than String.to_existing_atom/1 directly, so a forged value
+  # gets a clean error instead of crashing the LiveView - same reasoning
+  # as LabLive.Index's to_result/1.
+  def handle_event("record_outcome", %{"id" => id, "outcome" => outcome}, socket) do
+    case_record = CaseManagement.get_case!(id)
+    role = socket.assigns.current_scope.user.role
+
+    with outcome when not is_nil(outcome) <- to_outcome(outcome),
+         {:ok, updated_case} <- CaseManagement.record_outcome(case_record, outcome, role) do
+      {:noreply,
+       put_flash(
+         socket,
+         :info,
+         "Outcome recorded: #{Phoenix.Naming.humanize(updated_case.outcome)}."
+       )}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "Unrecognized outcome.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You need an assigned role to record an outcome.")}
+
+      {:error, :not_a_case} ->
+        {:noreply,
+         put_flash(socket, :error, "This case was ruled out, so there's no outcome to record.")}
+
+      {:error, :outcome_already_recorded} ->
+        {:noreply, put_flash(socket, :error, "This case already has a recorded outcome.")}
+    end
+  end
+
   @impl true
   def handle_info({:created, %Case{} = case_record}, socket) do
     {:noreply,
@@ -251,7 +308,13 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
 
   defp status_badge_class(:suspected), do: "badge-warning"
   defp status_badge_class(:confirmed), do: "badge-error"
-  defp status_badge_class(:resolved), do: "badge-success"
+  defp status_badge_class(:not_a_case), do: "badge-ghost"
+
+  defp outcome_badge_class(:recovered), do: "badge-success"
+  defp outcome_badge_class(:died), do: "badge-neutral"
+
+  defp to_outcome(outcome) when outcome in ~w(recovered died), do: String.to_existing_atom(outcome)
+  defp to_outcome(_outcome), do: nil
 
   # Email for a web-registered reporter, phone for an SMS-only one
   # (Iteration 2's SmsReporting slice made `email` nullable and gave an
@@ -272,8 +335,11 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
     not is_nil(current_scope.user.role) and not is_nil(CaseManagement.next_status(status))
   end
 
-  defp advance_label(:suspected), do: "Confirm"
-  defp advance_label(:confirmed), do: "Resolve"
+  # Mirrors CaseManagement.record_outcome/3's checks, for the same
+  # "hiding a button isn't the authorization boundary" reason.
+  defp can_record_outcome?(current_scope, %Case{status: status, outcome: outcome}) do
+    not is_nil(current_scope.user.role) and status != :not_a_case and is_nil(outcome)
+  end
 
   defp time_ago(datetime) do
     seconds = DateTime.diff(DateTime.utc_now(), datetime, :second)

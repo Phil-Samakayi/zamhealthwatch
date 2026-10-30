@@ -8,7 +8,12 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
   @status_options [
     {"Suspected", :suspected},
     {"Confirmed", :confirmed},
-    {"Resolved", :resolved}
+    {"Not a case", :not_a_case}
+  ]
+
+  @outcome_options [
+    {"Recovered", :recovered},
+    {"Died", :died}
   ]
 
   @impl true
@@ -18,7 +23,9 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
       <.header>
         Epidemiology dashboard
         <:subtitle>
-          Live counts across all reported cases. Updates automatically as new cases come in.
+          Live counts of suspected and confirmed cases - reports ruled out by a negative lab
+          result are shown under "Not a case" but excluded from every other total. Updates
+          automatically as new cases come in.
         </:subtitle>
       </.header>
 
@@ -52,6 +59,20 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
         <div :for={{label, status} <- @status_options} class="stat">
           <div class="stat-title">{label}</div>
           <div class="stat-value text-2xl">{Map.get(@by_status, status, 0)}</div>
+        </div>
+      </div>
+
+      <div class="divider" />
+
+      <.header>
+        By outcome
+        <:subtitle>Recorded outcomes among suspected and confirmed cases.</:subtitle>
+      </.header>
+
+      <div class="stats stats-vertical lg:stats-horizontal shadow w-full">
+        <div :for={{label, outcome} <- @outcome_options} class="stat">
+          <div class="stat-title">{label}</div>
+          <div class="stat-value text-2xl">{Map.get(@by_outcome, outcome, 0)}</div>
         </div>
       </div>
 
@@ -102,6 +123,7 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
       socket
       |> assign(:disease_options, Case.disease_options())
       |> assign(:status_options, @status_options)
+      |> assign(:outcome_options, @outcome_options)
       |> assign_stats()
 
     {:ok, socket}
@@ -135,6 +157,7 @@ defmodule ZamHealthWatchWeb.EpidemiologyLive.Index do
     |> assign(:total_cases, CaseManagement.count_cases())
     |> assign(:by_disease, CaseManagement.count_cases_by_disease())
     |> assign(:by_status, CaseManagement.count_cases_by_status())
+    |> assign(:by_outcome, CaseManagement.count_cases_by_outcome())
     |> assign(:by_facility, by_facility)
     |> assign(:by_district, by_district(facilities, by_facility_counts))
   end
