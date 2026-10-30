@@ -235,6 +235,41 @@ defmodule ZamHealthWatch.CaseManagementTest do
              ) == %{}
     end
 
+    test "count_cases_by_facility_and_disease_between/2 groups by facility and disease, skipping ruled-out cases" do
+      facility = facility_fixture()
+      other_facility = facility_fixture()
+
+      case_fixture(%{facility_id: facility.id, disease: :cholera})
+      case_fixture(%{facility_id: facility.id, disease: :cholera})
+      case_fixture(%{facility_id: facility.id, disease: :malaria})
+      case_fixture(%{facility_id: other_facility.id, disease: :cholera})
+
+      ruled_out = case_fixture(%{facility_id: facility.id, disease: :malaria})
+      {:ok, _} = CaseManagement.update_case_status(ruled_out, %{status: :not_a_case})
+
+      assert CaseManagement.count_cases_by_facility_and_disease_between(
+               DateTime.add(DateTime.utc_now(), -3600, :second),
+               DateTime.add(DateTime.utc_now(), 3600, :second)
+             ) == %{
+               {facility.id, :cholera} => 2,
+               {facility.id, :malaria} => 1,
+               {other_facility.id, :cholera} => 1
+             }
+    end
+
+    test "count_cases_by_facility_and_disease_between/2 only counts cases reported inside the window" do
+      facility = facility_fixture()
+
+      _before_window = report_case_at(facility, ~U[2026-08-20 00:00:00Z])
+      _inside_window = report_case_at(facility, ~U[2026-09-02 00:00:00Z])
+      _at_the_boundary_after_window = report_case_at(facility, ~U[2026-09-08 00:00:00Z])
+
+      assert CaseManagement.count_cases_by_facility_and_disease_between(
+               ~U[2026-09-01 00:00:00Z],
+               ~U[2026-09-08 00:00:00Z]
+             ) == %{{facility.id, :malaria} => 1}
+    end
+
     defp report_case_at(facility, inserted_at) do
       case = case_fixture(%{facility_id: facility.id})
 

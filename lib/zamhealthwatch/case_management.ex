@@ -529,6 +529,32 @@ defmodule ZamHealthWatch.CaseManagement do
     |> Map.new()
   end
 
+  @doc """
+  Returns countable case counts for cases reported in `[start_dt, end_dt)`,
+  grouped by facility *and* disease, as `%{{facility_id, disease} => count}`.
+
+  Added for district-level risk scoring (Iteration 17), which trends each
+  disease separately: surveillance thresholds are per disease, and adding
+  diseases together lets a rise in one hide behind a fall in another. Same
+  window, exclusions, and zero-omission as
+  `count_cases_by_facility_between/2`.
+
+  ## Examples
+
+      iex> count_cases_by_facility_and_disease_between(~U[2026-09-01 00:00:00Z], ~U[2026-09-08 00:00:00Z])
+      %{{"facility-uuid", :cholera} => 2, {"facility-uuid", :malaria} => 1}
+
+  """
+  def count_cases_by_facility_and_disease_between(start_dt, end_dt) do
+    Repo.all(
+      from c in countable(),
+        where: c.inserted_at >= ^start_dt and c.inserted_at < ^end_dt,
+        group_by: [c.facility_id, c.disease],
+        select: {{c.facility_id, c.disease}, count(c.id)}
+    )
+    |> Map.new()
+  end
+
   # Suspected or confirmed - the cases surveillance counts.
   defp countable do
     from c in Case, where: c.status != :not_a_case
