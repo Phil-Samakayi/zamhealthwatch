@@ -686,6 +686,32 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `CaseLive.Index` (outcome column, Recovered/Died actions, forged-value handling), `EpidemiologyLive.Index` (Not a case and outcome tiles), National Reporting (columns, `case_total/1`, deaths), `Demo`.
 - [x] Tests: `CaseManagementTest` (exclusion from every total, `:not_a_case` still in by-status, outcome counts, `any_cases?/0`, every `record_outcome/3` rule), updated `LabReportingTest`/`LabLive.IndexTest`/`CaseLive.IndexTest` (outcome actions, forged values, ruled-out cases), `NationalReportingTest` (new columns, ruled-out and deaths), `DemoTest` (21 countable of 22 reports, outcomes, the adjusted trend).
 
+**Status:** 506 tests, 0 failures, first run. Migration applied cleanly to the development database. Closed.
+
+---
+
+## Iteration 15 — Lab result corrections (slice 2 of 3)
+
+**Goal:** make results come from the lab, and record who entered each one. Before this, any assigned role could result a test, including the district officer who'd act on it, and a result said when it was entered but not by whom.
+
+**Decisions:**
+
+- **A new `:lab_officer` role, and the only one that can enter results.** That's how real labs work: lab staff enter and verify results, and the clinicians and officers who use them don't. MOH admin is deliberately left out of *entering* results too. The original proposal gives MOH admin a role in *correcting* them (slice 3), which is a different action. `users.role` is a plain string column, so adding the value needed no migration, just the enum and the admin page's role list.
+- **The rule lives in one place.** `LabReporting.can_record_results?/1` is the rule, `record_result/3` enforces it, and `LabLive.Index` asks it whether to show the result buttons, instead of keeping its own copy as before ("any assigned role").
+- **`record_result/3` takes the recording user, not a role.** Its third argument is now any map with `:id` and `:role` (in practice `current_scope.user`), so it can store who entered the result. It doesn't pattern-match on `%Accounts.User{}`, keeping the same decoupling from `Accounts`'s schema that `CaseManagement.advance_case_status/2` keeps.
+- **`resulted_by_id`** on `lab_tests`, a foreign key to `users` with `on_delete: :restrict` (the same audit rule as `requested_by_id`), required by `LabTest.result_changeset/2` for every new result. It's nullable in the database because results entered before this have no record of who entered them, and inventing one would be worse than admitting it. The lab table's new "Resulted by" column says "Not recorded" for those, rather than leaving a blank that reads like missing data.
+- **Lab officers see every facility's tests.** In practice one lab serves several facilities (a district lab, a hospital lab taking referrals), so the health-worker facility scoping from Iteration 12 doesn't apply to them.
+- **Demo:** a fourth demo account, `lab.officer@example.com`, now enters the demo results. Anyone trying the demo can log in as each side of the workflow: health worker requests a test, lab officer results it, district officer sees the effect.
+
+**Built:**
+
+- [x] Migration `add_resulted_by_to_lab_tests`.
+- [x] `User` role `:lab_officer`; "Lab officer" option on `/admin/users`.
+- [x] `LabReporting.can_record_results?/1`; `record_result/3` restricted to lab officers, storing `resulted_by_id`.
+- [x] `LabLive.Index`: result buttons for lab officers only, a "Resulted by" column, and a clear refusal message for anyone else.
+- [x] `Demo`: lab officer account, and demo results entered by it.
+- [x] Tests: `LabReportingTest` (lab officer records and is recorded; every other role refused; `can_record_results?/1`), `LabLive.IndexTest` (buttons only for lab officers, "Resulted by" shown, forged events from other roles refused), `DemoTest` (demo results attributed to the lab officer), `NationalReportingTest` updated.
+
 **Status:** pending `mix test` verification.
 
 ---
