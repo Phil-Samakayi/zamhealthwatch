@@ -32,6 +32,13 @@ defmodule ZamHealthWatch.CaseManagement.Case do
     field :outcome, Ecto.Enum, values: [:recovered, :died]
     field :outcome_at, :utc_datetime
 
+    # When a person confirmed this case on clinical or epidemiological
+    # grounds (the case list's Confirm button), or `nil` if nobody has.
+    # Kept as its own fact since Iteration 15 so that `status` can be
+    # recalculated from lab results without losing it - see
+    # `CaseManagement.classification_for/2`.
+    field :clinically_confirmed_at, :utc_datetime
+
     field :facility_id, :binary_id
     field :reported_by_id, :binary_id
 
@@ -73,6 +80,17 @@ defmodule ZamHealthWatch.CaseManagement.Case do
     case
     |> cast(attrs, [:status])
     |> validate_required([:status])
+  end
+
+  @doc """
+  A case changeset for a person confirming the case clinically: records
+  when, and sets the classification to `:confirmed`.
+  """
+  def clinical_confirmation_changeset(case) do
+    change(case,
+      status: :confirmed,
+      clinically_confirmed_at: DateTime.utc_now(:second)
+    )
   end
 
   @doc """

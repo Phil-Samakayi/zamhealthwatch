@@ -238,7 +238,75 @@ defmodule ZamHealthWatch.CaseManagement do
     cond do
       is_nil(role) -> {:error, :unauthorized}
       is_nil(next_status(case.status)) -> {:error, :no_next_status}
-      true -> update_case_status(case, %{status: next_status(case.status)})
+      true -> confirm_clinically(case)
+    end
+  end
+
+  # The only manual transition (`:suspected` -> `:confirmed`) also
+  # records *that* a person confirmed it, so the confirmation survives
+  # later lab-driven recalculation - see classification_for/2.
+  defp confirm_clinically(%Case{} = case) do
+    with {:ok, case = %Case{}} <-
+           case
+           |> Case.clinical_confirmation_changeset()
+           |> Repo.update() do
+      broadcast_case({:updated, case})
+      {:ok, case}
+    end
+  end
+
+  @doc """
+  Returns the classification a case should have, given what its lab
+  results say (`lab_verdict`) and whether a person confirmed it
+  clinically.
+
+  `lab_verdict` comes from `LabReporting`, which owns what results mean:
+  `:positive` if any current result is positive, `:negative` if none is
+  positive but at least one is negative, `:none` if there's no
+  conclusive current result. Rules, in order:
+
+    1. A positive result confirms the case. One positive outweighs
+       negatives on other tests - a negative test can miss a real
+       infection, a positive one rarely invents one.
+    2. A negative result, with no positive, rules the case out - even
+       one a person had confirmed clinically. A laboratory finding
+       outranks a clinical impression; that's what the test was for.
+    3. With no conclusive result, a clinical confirmation still stands.
+    4. Otherwise the case is suspected.
+
+  Because the result depends only on these facts, never on the case's
+  previous status, recalculating after a lab result is corrected or
+  withdrawn gives the right answer automatically. There's nothing to
+  "undo".
+
+  ## Examples
+
+      iex> classification_for(:negative, ~U[2026-10-01 09:00:00Z])
+      :not_a_case
+
+      iex> classification_for(:none, ~U[2026-10-01 09:00:00Z])
+      :confirmed
+
+      iex> classification_for(:none, nil)
+      :suspected
+
+  """
+  def classification_for(:positive, _clinically_confirmed_at), do: :confirmed
+  def classification_for(:negative, _clinically_confirmed_at), do: :not_a_case
+  def classification_for(:none, nil), do: :suspected
+  def classification_for(:none, _clinically_confirmed_at), do: :confirmed
+
+  @doc """
+  Recalculates a case's classification from `lab_verdict` (see
+  `classification_for/2`) and saves it if it changed. Called by
+  `LabReporting` whenever one of the case's results is entered,
+  corrected, or withdrawn. Returns `{:ok, case}` either way; nothing is
+  written or broadcast when the classification is already right.
+  """
+  def apply_lab_verdict(%Case{} = case_record, lab_verdict) do
+    case classification_for(lab_verdict, case_record.clinically_confirmed_at) do
+      status when status == case_record.status -> {:ok, case_record}
+      status -> update_case_status(case_record, %{status: status})
     end
   end
 

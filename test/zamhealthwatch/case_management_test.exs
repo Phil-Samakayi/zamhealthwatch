@@ -266,6 +266,15 @@ defmodule ZamHealthWatch.CaseManagementTest do
       assert updated_case.status == :confirmed
     end
 
+    test "advance_case_status/2 records when the case was confirmed clinically" do
+      case = case_fixture()
+      assert case.clinically_confirmed_at == nil
+
+      {:ok, updated_case} = CaseManagement.advance_case_status(case, :health_worker)
+
+      assert updated_case.clinically_confirmed_at != nil
+    end
+
     test "advance_case_status/2 rejects a nil role" do
       case = case_fixture()
 
@@ -333,6 +342,63 @@ defmodule ZamHealthWatch.CaseManagementTest do
 
       assert {:error, changeset} = CaseManagement.record_outcome(case, :closed, :health_worker)
       assert %{outcome: ["is invalid"]} = errors_on(changeset)
+    end
+  end
+
+  describe "classification_for/2" do
+    @clinical ~U[2026-10-01 09:00:00Z]
+
+    test "a positive verdict confirms, with or without a clinical confirmation" do
+      assert CaseManagement.classification_for(:positive, nil) == :confirmed
+      assert CaseManagement.classification_for(:positive, @clinical) == :confirmed
+    end
+
+    test "a negative verdict rules the case out, even over a clinical confirmation" do
+      assert CaseManagement.classification_for(:negative, nil) == :not_a_case
+      assert CaseManagement.classification_for(:negative, @clinical) == :not_a_case
+    end
+
+    test "with no conclusive verdict, a clinical confirmation stands" do
+      assert CaseManagement.classification_for(:none, @clinical) == :confirmed
+    end
+
+    test "with no conclusive verdict and no clinical confirmation, the case is suspected" do
+      assert CaseManagement.classification_for(:none, nil) == :suspected
+    end
+  end
+
+  describe "apply_lab_verdict/2" do
+    import ZamHealthWatch.CaseManagementFixtures
+
+    test "updates the classification and broadcasts when it changes" do
+      case = case_fixture()
+      CaseManagement.subscribe_cases()
+
+      assert {:ok, updated} = CaseManagement.apply_lab_verdict(case, :negative)
+      assert updated.status == :not_a_case
+      assert_receive {:updated, ^updated}
+    end
+
+    test "writes and broadcasts nothing when the classification is already right" do
+      case = case_fixture()
+      CaseManagement.subscribe_cases()
+
+      assert {:ok, ^case} = CaseManagement.apply_lab_verdict(case, :none)
+
+      # Matched on this case's id: the "cases" topic is shared with any
+      # concurrently running async test that reports a case.
+      case_id = case.id
+      refute_receive {:updated, %{id: ^case_id}}
+    end
+
+    test "returns a clinically confirmed case to confirmed when the lab verdict is withdrawn" do
+      case = case_fixture()
+      {:ok, confirmed} = CaseManagement.advance_case_status(case, :health_worker)
+      {:ok, ruled_out} = CaseManagement.apply_lab_verdict(confirmed, :negative)
+      assert ruled_out.status == :not_a_case
+
+      assert {:ok, restored} = CaseManagement.apply_lab_verdict(ruled_out, :none)
+      assert restored.status == :confirmed
     end
   end
 end
