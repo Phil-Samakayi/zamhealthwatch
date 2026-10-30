@@ -815,6 +815,32 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `RiskLive.Index`: "By district" table (`#district-risks`, one row per district, each disease's weekly counts and tier) above the facility table, updating live on new and updated cases.
 - [x] Tests: `CaseManagementTest` (grouping by facility and disease, ruled-out cases skipped, window edges), `PredictiveAnalyticsTest` (empty district, same disease added across facilities, rising and falling diseases kept apart while the facility read sees a flat line, facility without a district left out, out-of-window case ignored, sort order), `RiskLive.IndexTest` (district row with per-disease trends, no-data district, live update, empty state).
 
+**Status:** 579 tests, 0 failures, first run. Closed.
+
+---
+
+## Iteration 17 — District-level risk scoring (slice 2 of 2)
+
+**Goal:** the brief's "vaccination coverage feeds risk scoring", deferred since Iteration 6 because coverage is per district and risk was per facility. Slice 1 made risk per district, so the two can now meet.
+
+**Decisions:**
+
+- **Coverage applies only to the disease its vaccine prevents.** Of the five diseases cases can be reported for, only measles has an antigen in the system (measles-rubella). There's no cholera, malaria, typhoid, or COVID-19 antigen in `VaccinationRecord`'s list. Applying measles-rubella coverage to cholera risk would be invented epidemiology, so `@vaccine_for` maps measles to measles-rubella and nothing else. Adding a pair there is all it takes to extend it.
+- **Below 95% is an immunity gap.** 95% is the commonly cited level needed to stop measles spreading, and population immunity is one of the four categories in WHO's district-level measles programmatic risk assessment tool. The tool's other three categories (surveillance quality, programme performance, threat assessment) need data this system doesn't collect, so this is one part of that tool, not a copy of it. Logged as a known limitation.
+- **Measles cases plus a gap raise measles, and so the district, to a new third tier, High,** whatever the slope says: cases are already circulating in a population that can't stop them. The trend line records which coverage figure caused it, and the page says so ("Cases with Measles-Rubella coverage at 47.5%"). A facility's own tier is never High; only the district read has the coverage to know.
+- **A gap without measles cases is shown but changes no tier.** It's a vulnerability, not an outbreak. A district with no coverage record shows "No coverage data" and isn't treated as either safe or at risk.
+- **Latest record wins,** whatever the campaign, the same way capacity uses each facility's latest report. A district's figure is whatever it reported most recently. `VaccinationMonitoring.latest_coverage_by_district/1` owns that query.
+- **Badge colours:** High is the only red. Elevated drops to amber, so the three tiers can be told apart at a glance.
+- **Demo data:** two recent measles cases at Monze Mission Hospital, where demo measles-rubella coverage is 47.5%. The live demo now shows all three cases: Monze High (measles and a gap), Lusaka Elevated (cholera, with an 84% gap that changes nothing because there's no measles), and Ndola Stable (measles, but no coverage record).
+
+**Built:**
+
+- [x] `VaccinationMonitoring.latest_coverage_by_district/1`.
+- [x] `PredictiveAnalytics`: `@vaccine_for`, `immunity_threshold/0`, `ImmunityStatus` struct, `DistrictRisk.immunity`, `DiseaseTrend.escalated_by`, the `:high` tier.
+- [x] `RiskLive.Index`: Immunity column, the reason shown under a raised disease, High/Elevated colours, live updates on new coverage records.
+- [x] Demo: measles cases at Monze; `DemoTest` updated for 24 reports and the district tiers.
+- [x] Tests: `VaccinationMonitoringTest` (latest per district, other antigens ignored), `PredictiveAnalyticsTest` (gap raises measles to High, 95% doesn't, no record doesn't, gap without measles changes nothing including other diseases, latest record used, High sorts above Elevated), `RiskLive.IndexTest` (High with its reason and the gap badge, "No coverage data", live update on a new coverage record), `DemoTest` (Monze High, Lusaka Elevated, Ndola Stable).
+
 **Status:** pending `mix test` verification.
 
 ---
