@@ -844,3 +844,32 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 **Status:** 590 tests, 0 failures, first run. Closed. With this slice, Iteration 17 is complete: risk is scored per district and per disease, and measles-rubella coverage raises measles risk where it leaves an immunity gap.
 
 ---
+
+## Iteration 18 — Correcting a recorded outcome
+
+**Goal:** close the gap Iteration 15 left on purpose. Once Recovered or Died was recorded on a case it couldn't be changed: `record_outcome/3` refuses to overwrite, so a mis-click can't silently replace a death, but there was no audited way to fix a real mistake. A wrongly recorded death matters most, because it shows in Deaths on the dashboards and in the national CSV.
+
+**Decisions:**
+
+- **Same design as lab result corrections (Iteration 15),** since that one already follows real-world practice: the original value is never overwritten without a trace, a reason is required, and the history is append-only.
+- **Two actions.** Change the outcome (Died to Recovered or back), or remove it as entered in error (recorded on the wrong patient's case, say), which returns the case to "no outcome yet" so the right one can be recorded afresh.
+- **Only district officers and MOH admins can correct.** A supervisory check, so the person who entered a death can't quietly reverse it. This mirrors lab corrections, where lab officers and the MOH admin correct. A health worker sees the history of their own facility's cases but no correction form.
+- **Who recorded the outcome is now stored** (`cases.outcome_recorded_by_id`). Until now `record_outcome/3` only checked the recorder's role and stored nobody, so a correction couldn't say whose entry it corrected. Its third argument is now the user (`%{id, role}`), the same shape `LabReporting.record_result/3` takes. Outcomes recorded before this migration have no recorder; the column is nullable for them.
+- **A correction keeps the original entry's time and author;** the correction row records the corrector. Removing an outcome clears all three outcome fields.
+- **Counts follow automatically.** Deaths on the dashboards and in National Reporting are worked out from each case's current outcome, so nothing else needed changing.
+- **The requester isn't notified,** unlike a lab correction. Whoever recorded an outcome didn't make a clinical decision based on it, the way a clinician does on a lab result. Possible later if wanted.
+- **Fixed on the way: live case scoping.** `CaseLive.Index` streamed in every broadcast case, so a health worker's list picked up live reports from other facilities until they reloaded the page. New and updated cases are now only added when they're in the viewer's scope. A forged request to open the outcome panel for another facility's case is refused.
+- **Demo:** a third UTH malaria patient is recorded as died by the district officer and then corrected to recovered by the MOH admin, so the live demo shows a "Corrected" case and a real history. `Demo.reset_activity!/0` deletes outcome corrections before cases, for the foreign key.
+
+**Built:**
+
+- [x] Migration `add_case_outcome_corrections`: `cases.outcome_recorded_by_id`, `case_outcome_corrections` table.
+- [x] `CaseManagement.OutcomeCorrection` schema; `Case.outcome_correction_changeset/2`, `outcome_withdrawal_changeset/1`.
+- [x] `CaseManagement`: `record_outcome/3` now takes the recorder; `can_correct_outcomes?/1`, `correct_outcome/4`, `withdraw_outcome/3`, `list_outcome_corrections_for_case/1`, `list_outcome_corrected_case_ids/0`.
+- [x] `CaseLive.Index`: "Correct outcome" button, outcome panel (`#outcome-panel`: current outcome and who recorded it, the correction form, `#outcome-history`), "Corrected" marker on corrected cases, live scoping fix.
+- [x] Demo outcome correction.
+- [x] Tests: `CaseManagementTest` (correction and history, removal and re-recording, roles, no outcome, unchanged, reason required with nothing changed, invalid outcome, correcting a correction, counts and the corrected-case list follow), `CaseLive.IndexTest` (officer corrects and the history shows it, removal brings back the outcome buttons, short reason refused, health worker sees no button and a forged correction is refused, panel refused for another facility's case, live list scoped to the health worker's facility), `DemoTest` (demo correction, reset count), existing `record_outcome` callers updated.
+
+**Status:** pending `mix test` verification.
+
+---
