@@ -16,7 +16,8 @@ defmodule ZamHealthWatchWeb.AdminLive.Index do
   @role_options [
     {"Health worker", :health_worker},
     {"District officer", :district_officer},
-    {"MOH admin", :moh_admin}
+    {"MOH admin", :moh_admin},
+    {"Lab officer", :lab_officer}
   ]
 
   @impl true

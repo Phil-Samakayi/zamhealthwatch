@@ -10,7 +10,10 @@ defmodule ZamHealthWatch.Accounts.User do
     field :hashed_password, :string, redact: true
     field :confirmed_at, :utc_datetime
     field :authenticated_at, :utc_datetime, virtual: true
-    field :role, Ecto.Enum, values: [:health_worker, :district_officer, :moh_admin]
+    # `:lab_officer` added in Iteration 15: entering lab results is a lab
+    # scientist's job, not something every role should be able to do.
+    # `role` is a plain string column, so a new value needs no migration.
+    field :role, Ecto.Enum, values: [:health_worker, :district_officer, :moh_admin, :lab_officer]
     field :facility_id, :binary_id
     field :phone, :string
 
