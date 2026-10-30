@@ -463,4 +463,128 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
     # own rendered HTML) can.
     defp row_selector(%{id: id}), do: "#cases-#{id}"
   end
+
+  describe "outcome corrections" do
+    setup %{conn: conn} do
+      facility = facility_fixture(%{name: "Correction Clinic"})
+      recorder = user_fixture() |> set_role(:health_worker, facility.id)
+      case_record = case_fixture(%{facility_id: facility.id})
+      {:ok, died} = CaseManagement.record_outcome(case_record, :died, recorder)
+      %{conn: conn, facility: facility, recorder: recorder, died: died}
+    end
+
+    @reason "Patient was discharged home alive; the death was recorded in error."
+
+    test "a district officer corrects a recorded death, and the case shows it was corrected", %{
+      conn: conn,
+      recorder: recorder,
+      died: died
+    } do
+      officer = user_fixture() |> set_role(:district_officer)
+      {:ok, lv, _html} = conn |> log_in_user(officer) |> live(~p"/cases")
+
+      lv |> element("#cases-#{died.id} button", "Correct outcome") |> render_click()
+      assert has_element?(lv, "#outcome-panel", "Recorded by #{recorder.email}")
+
+      result =
+        lv
+        |> form("#outcome-correction-form",
+          correction: %{change_to: "recovered", reason: @reason}
+        )
+        |> render_submit()
+
+      assert result =~ "Outcome corrected to Recovered."
+      assert CaseManagement.get_case!(died.id).outcome == :recovered
+      assert has_element?(lv, "#cases-#{died.id}", "Recovered")
+      refute has_element?(lv, "#outcome-panel")
+
+      lv |> element("#cases-#{died.id} button", "Corrected") |> render_click()
+      assert has_element?(lv, "#outcome-history", "Died → Recovered")
+      assert has_element?(lv, "#outcome-history", @reason)
+      assert has_element?(lv, "#outcome-history", officer.email)
+    end
+
+    test "removing an outcome entered in error brings back the outcome buttons", %{
+      conn: conn,
+      died: died
+    } do
+      officer = user_fixture() |> set_role(:moh_admin)
+      {:ok, lv, _html} = conn |> log_in_user(officer) |> live(~p"/cases")
+
+      lv |> element("#cases-#{died.id} button", "Correct outcome") |> render_click()
+
+      result =
+        lv
+        |> form("#outcome-correction-form",
+          correction: %{change_to: "entered_in_error", reason: @reason}
+        )
+        |> render_submit()
+
+      assert result =~ "Outcome removed as entered in error."
+      assert CaseManagement.get_case!(died.id).outcome == nil
+      assert has_element?(lv, "#cases-#{died.id} button", "Died")
+      assert has_element?(lv, "#cases-#{died.id} button", "Corrected")
+    end
+
+    test "a short reason is refused and nothing changes", %{conn: conn, died: died} do
+      officer = user_fixture() |> set_role(:district_officer)
+      {:ok, lv, _html} = conn |> log_in_user(officer) |> live(~p"/cases")
+
+      lv |> element("#cases-#{died.id} button", "Correct outcome") |> render_click()
+
+      result =
+        lv
+        |> form("#outcome-correction-form", correction: %{change_to: "recovered", reason: "oops"})
+        |> render_submit()
+
+      assert result =~ "Give a reason of at least 10 characters."
+      assert has_element?(lv, "#outcome-panel")
+      assert CaseManagement.get_case!(died.id).outcome == :died
+    end
+
+    test "a health worker sees no Correct outcome button, and a forged correction is refused", %{
+      conn: conn,
+      recorder: recorder,
+      died: died
+    } do
+      {:ok, lv, _html} = conn |> log_in_user(recorder) |> live(~p"/cases")
+
+      refute has_element?(lv, "#cases-#{died.id} button", "Correct outcome")
+
+      result =
+        render_submit(lv, "submit_outcome_correction", %{
+          "correction" => %{"case_id" => died.id, "change_to" => "recovered", "reason" => @reason}
+        })
+
+      assert result =~ "Only a district officer or MOH admin can correct an outcome."
+      assert CaseManagement.get_case!(died.id).outcome == :died
+    end
+
+    test "a health worker can't open the outcome panel for another facility's case", %{
+      conn: conn,
+      recorder: recorder
+    } do
+      other_case = case_fixture(%{facility_id: facility_fixture().id})
+      {:ok, lv, _html} = conn |> log_in_user(recorder) |> live(~p"/cases")
+
+      result = render_click(lv, "open_outcome_panel", %{"id" => other_case.id})
+
+      assert result =~ "That case isn&#39;t at your facility."
+      refute has_element?(lv, "#outcome-panel")
+    end
+
+    test "a health worker's list doesn't pick up cases reported live at other facilities", %{
+      conn: conn,
+      facility: facility,
+      recorder: recorder
+    } do
+      {:ok, lv, _html} = conn |> log_in_user(recorder) |> live(~p"/cases")
+
+      other = case_fixture(%{facility_id: facility_fixture().id})
+      own = case_fixture(%{facility_id: facility.id})
+
+      assert has_element?(lv, "#cases-#{own.id}")
+      refute has_element?(lv, "#cases-#{other.id}")
+    end
+  end
 end

@@ -4,6 +4,7 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
+  alias ZamHealthWatch.CaseManagement.OutcomeCorrection
   alias ZamHealthWatch.Geography
 
   # Since Iteration 15, closing a case means recording what happened to
@@ -65,6 +66,73 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
 
       <div class="divider" />
 
+      <div
+        :if={@outcome_panel}
+        id="outcome-panel"
+        class="rounded-box border border-base-300 bg-base-200 p-4 space-y-3"
+      >
+        <h3 class="font-semibold">Outcome</h3>
+        <p class="text-sm">
+          {Case.disease_label(@outcome_panel.case.disease)} case at {Map.get(
+            @facilities_by_id,
+            @outcome_panel.case.facility_id,
+            "Unknown facility"
+          )}. Current outcome:
+          <span class="font-semibold">{outcome_label(@outcome_panel.case.outcome)}</span>.
+          <span :if={@outcome_panel.case.outcome_recorded_by_id}>
+            Recorded by {Map.get(@reporters_by_id, @outcome_panel.case.outcome_recorded_by_id, "Unknown user")}.
+          </span>
+        </p>
+
+        <.form
+          :if={@outcome_panel.can_correct}
+          for={@outcome_form}
+          id="outcome-correction-form"
+          phx-submit="submit_outcome_correction"
+        >
+          <input type="hidden" name="correction[case_id]" value={@outcome_panel.case.id} />
+          <.input
+            field={@outcome_form[:change_to]}
+            type="select"
+            label="Change to"
+            options={change_to_options(@outcome_panel.case.outcome)}
+            prompt="Select a correction"
+          />
+          <p class="text-xs text-base-content/60">
+            Remove the outcome only if it should never have been recorded on this case (entered on the wrong patient's case, for example). An outcome that was simply wrong should be changed.
+          </p>
+          <.input
+            field={@outcome_form[:reason]}
+            type="textarea"
+            label="Reason (required, at least 10 characters)"
+          />
+          <.button variant="primary" phx-disable-with="Saving...">Save correction</.button>
+        </.form>
+
+        <div :if={@outcome_panel.history != []} id="outcome-history">
+          <h4 class="font-semibold text-sm">
+            Correction history
+            <span class="font-normal text-base-content/60">
+              - newest first. Nothing here is ever edited or deleted.
+            </span>
+          </h4>
+          <.table
+            id="outcome-corrections"
+            rows={@outcome_panel.history}
+            row_id={&"outcome-correction-#{&1.id}"}
+          >
+            <:col :let={correction} label="When">{time_ago(correction.inserted_at)}</:col>
+            <:col :let={correction} label="Change">{outcome_change_label(correction)}</:col>
+            <:col :let={correction} label="Reason">{correction.reason}</:col>
+            <:col :let={correction} label="By">
+              {Map.get(@reporters_by_id, correction.corrected_by_id, "Unknown user")}
+            </:col>
+          </.table>
+        </div>
+
+        <button type="button" class="btn btn-sm" phx-click="close_outcome_panel">Close</button>
+      </div>
+
       <.header>
         Reported cases
         <:subtitle>
@@ -93,6 +161,15 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
           <span :if={entry.outcome} class={["badge", outcome_badge_class(entry.outcome)]}>
             {Phoenix.Naming.humanize(entry.outcome)}
           </span>
+          <button
+            :if={MapSet.member?(@corrected_case_ids, entry.id)}
+            type="button"
+            class="badge badge-outline badge-sm cursor-pointer"
+            phx-click="open_outcome_panel"
+            phx-value-id={entry.id}
+          >
+            Corrected
+          </button>
         </:col>
         <:col :let={{_id, entry}} label="Reported">{time_ago(entry.inserted_at)}</:col>
         <:col :let={{_id, entry}} label="Actions">
@@ -114,6 +191,14 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
               phx-value-outcome={outcome}
             >
               {label}
+            </.button>
+            <.button
+              :if={can_correct_outcome?(@current_scope, entry)}
+              class="btn btn-xs"
+              phx-click="open_outcome_panel"
+              phx-value-id={entry.id}
+            >
+              Correct outcome
             </.button>
           </div>
         </:col>
@@ -140,6 +225,9 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
       |> assign(:facilities_by_id, Map.new(facilities, &{&1.id, &1.name}))
       |> assign(:reporters_by_id, Map.new(Accounts.list_users(), &{&1.id, reporter_label(&1)}))
       |> assign(:case_count, length(cases))
+      |> assign(:corrected_case_ids, CaseManagement.list_outcome_corrected_case_ids())
+      |> assign(:outcome_panel, nil)
+      |> assign(:outcome_form, empty_outcome_form())
       |> assign_form(CaseManagement.change_case(%Case{}))
       |> stream(:cases, cases)
 
@@ -255,10 +343,10 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   # as LabLive.Index's to_result/1.
   def handle_event("record_outcome", %{"id" => id, "outcome" => outcome}, socket) do
     case_record = CaseManagement.get_case!(id)
-    role = socket.assigns.current_scope.user.role
+    recorder = socket.assigns.current_scope.user
 
     with outcome when not is_nil(outcome) <- to_outcome(outcome),
-         {:ok, updated_case} <- CaseManagement.record_outcome(case_record, outcome, role) do
+         {:ok, updated_case} <- CaseManagement.record_outcome(case_record, outcome, recorder) do
       {:noreply,
        put_flash(
          socket,
@@ -281,17 +369,151 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
     end
   end
 
-  @impl true
-  def handle_info({:created, %Case{} = case_record}, socket) do
-    {:noreply,
-     socket
-     |> stream_insert(:cases, case_record, at: 0)
-     |> update(:case_count, &(&1 + 1))}
+  # Opens the outcome panel: the case's outcome, its correction history,
+  # and - for a role that can correct outcomes, on a case that has one -
+  # the correction form. Anyone who can see the case can see its
+  # history; a forged id for a case outside a health worker's facility
+  # is refused.
+  def handle_event("open_outcome_panel", %{"id" => id}, socket) do
+    case_record = CaseManagement.get_case!(id)
+
+    if in_scope?(socket.assigns.scope, case_record) do
+      {:noreply,
+       socket
+       |> assign(:outcome_panel, outcome_panel(case_record, socket.assigns.current_scope))
+       |> assign(:outcome_form, empty_outcome_form())}
+    else
+      {:noreply, put_flash(socket, :error, "That case isn't at your facility.")}
+    end
   end
 
-  def handle_info({:updated, %Case{} = case_record}, socket) do
-    {:noreply, stream_insert(socket, :cases, case_record)}
+  def handle_event("close_outcome_panel", _params, socket) do
+    {:noreply, assign(socket, :outcome_panel, nil)}
   end
+
+  # CaseManagement re-checks the role, the outcome, and the reason
+  # itself; the form being visible is not the authorization boundary.
+  def handle_event("submit_outcome_correction", %{"correction" => params}, socket) do
+    case_record = CaseManagement.get_case!(params["case_id"])
+    corrector = socket.assigns.current_scope.user
+    reason = Map.get(params, "reason", "")
+
+    result =
+      case Map.get(params, "change_to") do
+        "entered_in_error" ->
+          CaseManagement.withdraw_outcome(case_record, reason, corrector)
+
+        change_to ->
+          case to_outcome(change_to) do
+            nil -> {:error, :no_change_selected}
+            outcome -> CaseManagement.correct_outcome(case_record, outcome, reason, corrector)
+          end
+      end
+
+    case result do
+      {:ok, %Case{outcome: nil}} ->
+        {:noreply,
+         socket
+         |> assign(:outcome_panel, nil)
+         |> put_flash(:info, "Outcome removed as entered in error.")}
+
+      {:ok, updated_case} ->
+        {:noreply,
+         socket
+         |> assign(:outcome_panel, nil)
+         |> put_flash(:info, "Outcome corrected to #{outcome_label(updated_case.outcome)}.")}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply,
+         socket
+         |> assign(
+           :outcome_form,
+           to_form(Map.take(params, ["change_to", "reason"]), as: "correction")
+         )
+         |> put_flash(:error, "Give a reason of at least 10 characters.")}
+
+      {:error, error} ->
+        {:noreply, put_flash(socket, :error, outcome_correction_error(error))}
+    end
+  end
+
+  # Only cases this user can see are added or updated: before Iteration
+  # 18 every broadcast case was streamed in, so a health worker's list
+  # picked up live reports from other facilities until they reloaded.
+  @impl true
+  def handle_info({:created, %Case{} = case_record}, socket) do
+    if in_scope?(socket.assigns.scope, case_record) do
+      {:noreply,
+       socket
+       |> stream_insert(:cases, case_record, at: 0)
+       |> update(:case_count, &(&1 + 1))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # The corrected-case set is refreshed before the row is re-inserted,
+  # so the row renders with its "Corrected" marker. An open panel on the
+  # same case is refreshed too, so its history and form stay current.
+  def handle_info({:updated, %Case{} = case_record}, socket) do
+    if in_scope?(socket.assigns.scope, case_record) do
+      {:noreply,
+       socket
+       |> assign(:corrected_case_ids, CaseManagement.list_outcome_corrected_case_ids())
+       |> refresh_outcome_panel(case_record)
+       |> stream_insert(:cases, case_record)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp in_scope?(:unrestricted, _case_record), do: true
+  defp in_scope?({:locked, facility_id}, %Case{facility_id: facility_id}), do: true
+  defp in_scope?(_scope, _case_record), do: false
+
+  defp outcome_panel(case_record, current_scope) do
+    %{
+      case: case_record,
+      history: CaseManagement.list_outcome_corrections_for_case(case_record.id),
+      can_correct: can_correct_outcome?(current_scope, case_record)
+    }
+  end
+
+  defp refresh_outcome_panel(
+         %{assigns: %{outcome_panel: %{case: %{id: id}}}} = socket,
+         %Case{id: id} = case_record
+       ) do
+    assign(socket, :outcome_panel, outcome_panel(case_record, socket.assigns.current_scope))
+  end
+
+  defp refresh_outcome_panel(socket, _case_record), do: socket
+
+  defp empty_outcome_form do
+    to_form(%{"change_to" => nil, "reason" => ""}, as: "correction")
+  end
+
+  # Every outcome other than the current one, plus removing it.
+  defp change_to_options(current_outcome) do
+    Enum.reject(@outcome_options, fn {_label, value} -> value == current_outcome end) ++
+      [{"Remove - entered in error", "entered_in_error"}]
+  end
+
+  defp outcome_label(nil), do: "none recorded"
+  defp outcome_label(outcome), do: Phoenix.Naming.humanize(outcome)
+
+  defp outcome_change_label(%OutcomeCorrection{kind: :entered_in_error} = correction),
+    do: "#{outcome_label(correction.previous_outcome)} → removed (entered in error)"
+
+  defp outcome_change_label(%OutcomeCorrection{} = correction),
+    do: "#{outcome_label(correction.previous_outcome)} → #{outcome_label(correction.new_outcome)}"
+
+  defp outcome_correction_error(:unauthorized),
+    do: "Only a district officer or MOH admin can correct an outcome."
+
+  defp outcome_correction_error(:no_outcome), do: "This case has no recorded outcome to correct."
+  defp outcome_correction_error(:unchanged), do: "That's already this case's outcome."
+  defp outcome_correction_error(:no_change_selected), do: "Choose what to change the outcome to."
+  defp outcome_correction_error(_error), do: "That correction couldn't be saved."
 
   # `reported_by_id` is never taken from client params - it isn't a field on
   # the form - it's always the currently authenticated user, set here before
@@ -339,6 +561,11 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
   # "hiding a button isn't the authorization boundary" reason.
   defp can_record_outcome?(current_scope, %Case{status: status, outcome: outcome}) do
     not is_nil(current_scope.user.role) and status != :not_a_case and is_nil(outcome)
+  end
+
+  # Mirrors CaseManagement.correct_outcome/4's checks, for the same reason.
+  defp can_correct_outcome?(current_scope, %Case{outcome: outcome}) do
+    CaseManagement.can_correct_outcomes?(current_scope.user.role) and not is_nil(outcome)
   end
 
   defp time_ago(datetime) do
