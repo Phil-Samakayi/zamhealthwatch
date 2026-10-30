@@ -64,7 +64,10 @@ defmodule ZamHealthWatch.NationalReportingTest do
       case_record = case_fixture(%{facility_id: facility.id})
       pending = lab_test_fixture(%{case_id: case_record.id})
       lab_test_fixture(%{case_id: case_record.id})
-      ZamHealthWatch.LabReporting.record_result(pending, :positive, :moh_admin)
+      lab_officer =
+        ZamHealthWatch.AccountsFixtures.user_fixture()
+        |> ZamHealthWatch.AccountsFixtures.set_role(:lab_officer)
+      {:ok, _} = ZamHealthWatch.LabReporting.record_result(pending, :positive, lab_officer)
 
       assert [summary] = NationalReporting.facility_summary()
       assert summary.lab_tests_by_status == %{pending: 1, resulted: 1}

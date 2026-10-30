@@ -71,6 +71,13 @@ defmodule ZamHealthWatch.Demo do
       facility_code: nil,
       label: "MOH admin",
       note: "Everything above, plus National Reporting and user management"
+    },
+    %{
+      email: "lab.officer@example.com",
+      role: :lab_officer,
+      facility_code: nil,
+      label: "Lab officer",
+      note: "Enters lab results (Positive, Negative, Inconclusive) for every facility's tests"
     }
   ]
 
@@ -208,6 +215,7 @@ defmodule ZamHealthWatch.Demo do
   defp seed_all!(now) do
     worker = user!("health.worker@example.com")
     officer = user!("district.officer@example.com")
+    lab_officer = user!("lab.officer@example.com")
 
     facility_ids =
       Map.new(~w(KBW UTH NTH MMH), fn code -> {code, facility_id!(code)} end)
@@ -229,7 +237,7 @@ defmodule ZamHealthWatch.Demo do
         backdate!(case_record, now, days_ago)
       end
 
-    seed_case_outcomes!(cases, worker)
+    seed_case_outcomes!(cases, worker, lab_officer)
 
     for {code, medicine, qty, reorder} <- @demo_stock do
       {:ok, _stock} =
@@ -279,7 +287,7 @@ defmodule ZamHealthWatch.Demo do
   # died. At UTH, five malaria cases are confirmed clinically and two of
   # those patients have recovered - so the case list and dashboards show
   # every classification and both outcomes.
-  defp seed_case_outcomes!(cases, worker) do
+  defp seed_case_outcomes!(cases, worker, lab_officer) do
     kabwata_cholera =
       Enum.filter(cases, &(&1.disease == :cholera and &1.reported_by_id == worker.id))
 
@@ -292,7 +300,7 @@ defmodule ZamHealthWatch.Demo do
         LabReporting.request_test(%{case_id: case_record.id, requested_by_id: worker.id})
 
       if result != :pending do
-        {:ok, _resulted} = LabReporting.record_result(lab_test, result, :health_worker)
+        {:ok, _resulted} = LabReporting.record_result(lab_test, result, lab_officer)
       end
     end)
 

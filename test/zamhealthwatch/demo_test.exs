@@ -65,7 +65,8 @@ defmodule ZamHealthWatch.DemoTest do
       Demo.ensure_accounts!()
 
       demo_emails = Enum.map(Demo.accounts(), & &1.email)
-      assert Accounts.list_users() |> Enum.count(&(&1.email in demo_emails)) == 3
+      assert Accounts.list_users() |> Enum.count(&(&1.email in demo_emails)) ==
+               length(Demo.accounts())
     end
   end
 
@@ -92,7 +93,16 @@ defmodule ZamHealthWatch.DemoTest do
 
       # 22 reports, one of them ruled out by a negative lab result.
       assert CaseManagement.count_cases() == 21
-      assert length(LabReporting.list_lab_tests()) == 4
+      lab_tests = LabReporting.list_lab_tests()
+      assert length(lab_tests) == 4
+
+      # Every demo result is entered by the demo lab officer, the only
+      # role allowed to since Iteration 15.
+      lab_officer = Accounts.get_user_by_email("lab.officer@example.com")
+
+      assert lab_tests
+             |> Enum.filter(&(&1.status == :resulted))
+             |> Enum.all?(&(&1.resulted_by_id == lab_officer.id))
       assert length(DrugAvailability.list_drug_stocks()) == 8
       assert length(HospitalCapacity.list_capacity_reports()) == 4
       assert length(VaccinationMonitoring.list_vaccination_records()) == 4
