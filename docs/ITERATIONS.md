@@ -522,7 +522,7 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 
 ---
 
-## Iteration 12 — Health Worker Portal (slice 1 of 3)
+## Iteration 12 — Health Worker Portal (slice 1 of 4)
 
 **Goal:** the first of three Health Worker Portal sub-slices. Re-reading the brief's own stated scope for this module ("login, case entry, treatment guidance, local case tracking") against what already existed by Iteration 11 found that login (Accounts/`phx.gen.auth`) and case entry (`CaseLive.Index`, Iteration 1) were already built - this module wasn't a ground-up build, it was closing the two genuinely missing pieces: treatment guidance content, and a facility-scoped "my work" landing page (slice 2). This first slice is the guidance content.
 
@@ -544,7 +544,7 @@ One entry per iteration: the goal, decisions made (and why), what actually got b
 
 ---
 
-## Iteration 12 — Health Worker Portal (slice 2 of 3)
+## Iteration 12 — Health Worker Portal (slice 2 of 4)
 
 **Goal:** the second sub-slice - a facility-scoped landing page (`PortalLive.Index`, `/portal`) giving a health worker "my work" at a glance: their facility's recent cases, recent drug stock, and current capacity status, plus shortcuts into the existing report screens. This is what actually needed new facility-filtered queries; `CaseManagement.list_cases_by_facility/1` existed since Iteration 0 but had no real caller until now.
 
@@ -659,7 +659,7 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 
 ---
 
-## Iteration 15 — Lab result corrections, done the way real systems do them (slice 1 of 3)
+## Iteration 15 — Lab result corrections, done the way real systems do them (slice 1 of 4)
 
 **Why this iteration exists:** a question from using the live demo - "when a test is resulted, can it be reviewed or undone in case of a misdiagnosis?" The answer was no. `LabReporting.record_result/3` deliberately rejects a second result, the result's effect on the case is applied once and can't be reversed, and `LabTest` doesn't record who entered a result. Before designing a fix, I looked at how real lab and surveillance software handles corrections: US lab regulation (42 CFR 493.1291(k): notify the requester promptly, issue a corrected report, keep both the original and the corrected one), ISO 15189 (revised reports clearly identified as revisions), FHIR's report statuses (`corrected`, `appended`, `entered-in-error` - three different kinds of change), and SORMAS (case classification kept separate from patient outcome). Agreed plan, three slices:
 
@@ -690,7 +690,7 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 
 ---
 
-## Iteration 15 — Lab result corrections (slice 2 of 3)
+## Iteration 15 — Lab result corrections (slice 2 of 4)
 
 **Goal:** make results come from the lab, and record who entered each one. Before this, any assigned role could result a test, including the district officer who'd act on it, and a result said when it was entered but not by whom.
 
@@ -768,6 +768,6 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `LabLive.Index` notices panel with "Mark as seen"; `PortalLive.Index` notice count with a link.
 - [x] Tests: `LabReportingTest` (requester sees it, nobody else and not the corrector, acknowledge clears it and is idempotent, only the requester can, unknown/malformed ids, a second correction is a new notice), `CaseManagementTest` (reclassification broadcast from a lab verdict and from Confirm, none when unchanged), `SubscriberTest` (follow-up on ruled out, correction on reinstatement, nothing on a plain confirmation), new `ReclassificationAlertWorkerTest` (all three messages, delivery to every subscriber), `LabLive.IndexTest` (requester sees and clears the notice, others don't see it, forged acknowledgement refused), `PortalLive.IndexTest` (count and link shown only when there's something to review).
 
-**Status:** pending `mix test` verification. With this slice, Iteration 15 is complete: corrections that keep the original result, require a reason, recalculate the case's classification, and tell the people affected.
+**Status:** 559 tests, 0 failures, first run. Migration applied cleanly. Closed. With this slice, Iteration 15 is complete: corrections that keep the original result, require a reason, recalculate the case's classification, and tell the people affected.
 
 ---
