@@ -14,7 +14,7 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
       <.header>
         Outbreak risk
         <:subtitle>
-          A trend read on the last four weeks of reported cases per facility, alongside that facility's latest hospital capacity status. Updates automatically as new cases or capacity reports come in.
+          A trend read on the last four weeks of reported cases: per district and disease, then per facility alongside its latest hospital capacity status. Updates automatically as new cases or capacity reports come in.
         </:subtitle>
       </.header>
 
@@ -24,6 +24,51 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
           This is a statistical trend over case counts already in the system, not a machine-learned prediction - there's no historical dataset loaded yet to train one on.
         </span>
       </div>
+
+      <h2 class="text-lg font-semibold mt-6">By district</h2>
+      <p class="text-sm text-base-content/60">
+        Each disease is trended separately, so a rise in one can't hide behind a fall in another. A district's risk is that of its worst disease.
+      </p>
+
+      <p
+        :if={@district_risks == []}
+        id="no-district-risk-data"
+        class="text-sm text-base-content/60 mt-4"
+      >
+        No districts to assess yet.
+      </p>
+
+      <.table
+        :if={@district_risks != []}
+        id="district-risks"
+        rows={@district_risks}
+        row_id={&"district-#{&1.district_id}"}
+      >
+        <:col :let={risk} label="District">
+          {risk.district_name}
+          <span :if={risk.province} class="text-base-content/60">({risk.province})</span>
+        </:col>
+        <:col :let={risk} label="Risk">
+          <span class={["badge", tier_badge_class(risk.tier)]}>{tier_label(risk.tier)}</span>
+        </:col>
+        <:col :let={risk} label="Cases this week">{risk.recent_count}</:col>
+        <:col :let={risk} label="By disease (last 4 weeks)">
+          <span :if={risk.diseases == []} class="text-base-content/60">
+            No cases in the last 4 weeks
+          </span>
+          <ul :if={risk.diseases != []} class="space-y-1">
+            <li :for={trend <- risk.diseases}>
+              <span class="font-medium">{Case.disease_label(trend.disease)}</span>
+              {Enum.join(trend.weekly_counts, " → ")}
+              <span class={["badge badge-sm", tier_badge_class(trend.tier)]}>
+                {tier_label(trend.tier)}
+              </span>
+            </li>
+          </ul>
+        </:col>
+      </.table>
+
+      <h2 class="text-lg font-semibold mt-6">By facility</h2>
 
       <p :if={@risk_scores == []} id="no-risk-data" class="text-sm text-base-content/60 mt-4">
         No facilities to assess yet.
@@ -73,7 +118,9 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
   def handle_info({:created, %CapacityReport{}}, socket), do: {:noreply, assign_risk_scores(socket)}
 
   defp assign_risk_scores(socket) do
-    assign(socket, :risk_scores, PredictiveAnalytics.list_risk_scores())
+    socket
+    |> assign(:district_risks, PredictiveAnalytics.list_district_risks())
+    |> assign(:risk_scores, PredictiveAnalytics.list_risk_scores())
   end
 
   defp tier_label(:elevated), do: "Elevated"

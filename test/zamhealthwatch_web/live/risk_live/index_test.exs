@@ -54,6 +54,75 @@ defmodule ZamHealthWatchWeb.RiskLive.IndexTest do
         |> live(~p"/risk")
 
       assert html =~ "No facilities to assess yet."
+      assert html =~ "No districts to assess yet."
+    end
+
+    test "renders a district's risk with a trend for each disease", %{conn: conn} do
+      district = district_fixture(%{name: "Chongwe", province: "Lusaka"})
+      facility = facility_fixture(%{name: "Chongwe Clinic", district_id: district.id})
+      user = user_fixture()
+
+      for disease <- [:cholera, :cholera, :malaria] do
+        {:ok, _case} =
+          CaseManagement.create_case(%{
+            disease: disease,
+            facility_id: facility.id,
+            reported_by_id: user.id
+          })
+      end
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/risk")
+
+      row = lv |> element("#district-#{district.id}") |> render()
+      assert row =~ "Chongwe"
+      assert row =~ "(Lusaka)"
+      assert row =~ "Cholera"
+      assert row =~ "0 → 0 → 0 → 2"
+      assert row =~ "Malaria"
+      assert row =~ "0 → 0 → 0 → 1"
+    end
+
+    test "shows a district with no recent cases as having no data", %{conn: conn} do
+      district = district_fixture(%{name: "Quiet District"})
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user_fixture())
+        |> live(~p"/risk")
+
+      row = lv |> element("#district-#{district.id}") |> render()
+      assert row =~ "No data"
+      assert row =~ "No cases in the last 4 weeks"
+    end
+
+    test "updates a district live when a case is reported at one of its facilities", %{
+      conn: conn
+    } do
+      district = district_fixture(%{name: "Live District"})
+      facility = facility_fixture(%{district_id: district.id})
+      user = user_fixture()
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/risk")
+
+      assert lv |> element("#district-#{district.id}") |> render() =~
+               "No cases in the last 4 weeks"
+
+      {:ok, _case} =
+        CaseManagement.create_case(%{
+          disease: :typhoid,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      row = lv |> element("#district-#{district.id}") |> render()
+      assert row =~ "Typhoid"
+      refute row =~ "No cases in the last 4 weeks"
     end
 
     test "updates live when a new case is reported elsewhere", %{conn: conn} do
