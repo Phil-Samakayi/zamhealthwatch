@@ -930,3 +930,31 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 **Status:** 624 tests, 0 failures, first run. Closed.
 
 ---
+
+## Iteration 21 — Only registered numbers can report by SMS or USSD
+
+**Goal:** close the biggest gap before real SMS goes live. Since Iteration 2, `SmsReporting.report_from_sms/2` accepted a report from any phone, for any facility code, and created a role-less user for every unknown number. Every new case sends a public alert (Iteration 10), so a stranger texting `REPORT CHOLERA UTH` would have sent a false cholera alert to every subscriber. SMS and USSD reporting exist for health workers whose facilities have poor internet (confirmed with the project owner), so they should carry the same trust and rules as the web app, not less.
+
+**Decisions:**
+
+- **Registered numbers only.** A report is accepted only from a phone number registered to a user who has a role. An MOH admin registers it on `/admin/users`, beside the role and facility. Anything else gets `:unregistered_number`, checked before the message is even read, and no account is created. This matches how established SMS reporting systems work (Uganda's mTrac and DHIS2's SMS reporting both accept reports only from registered reporters).
+- **A health worker reports for their own facility,** the same rule as the web form. `REPORT CHOLERA` is enough. Their own code is accepted too, and any other code is refused with a reply naming their facility. Other roles have no facility of their own, so they must give a code (`REPORT CHOLERA UTH`).
+- **USSD follows the same rules.** An unregistered number is told it can't report as soon as it picks "Report a case", rather than after going through the menu. A health worker is never asked for a facility code: picking the disease files the report, one step fewer on a poor connection. Other roles are asked for the code as before.
+- **Phone numbers are stored in international format** (`+260971234567`), the form Africa's Talking sends as the sender, so the two match exactly. The admin form validates the format, trims spaces, and refuses a number already registered to another user. An empty value clears it.
+- **SUBSCRIBE/STOP stay open to everyone.** Anyone should be able to receive public alerts. Only *reporting* needs trust.
+- **An unregistered number still gets a reply,** telling it to ask the MOH administrator. That costs an SMS per message from a stranger, but a health worker whose number simply hasn't been registered yet needs to know why nothing happened.
+- **`Accounts.find_or_create_sms_reporter/1` is gone,** replaced by `get_user_by_phone/1`. Phone-only users it created earlier are still shown by their phone number. They can't report, since they have no role.
+- **Not done: community reporting.** Reports from the public (WHO's event-based surveillance) are a real practice, but they should be a separate "community signal" a district officer verifies before it becomes a case or sends any alert. Logged as a possible future iteration.
+
+**Built:**
+
+- [x] `User.role_changeset/2` casts and validates `phone`; `Accounts.get_user_by_phone/1`; `find_or_create_sms_reporter/1` removed.
+- [x] `SmsReporting.report_from_sms/2`: registered reporter first, then `REPORT <DISEASE> [<CODE>]` with the facility rules above; `reporter_kind/1`; replies for every new refusal.
+- [x] `UssdReporting`: registration check on "Report a case"; health workers skip the facility code.
+- [x] `AdminLive.Index`: SMS phone column and input.
+- [x] Test fixtures: `set_phone/2`, `phone_only_user_fixture/1`.
+- [x] Tests: `AccountsTest` (register, trim, format, duplicate, clear, lookup), `SmsReportingTest` (unregistered and role-less refused with no account or case created, health worker's own facility with and without its code, another facility's code refused, no facility, other roles must name one, replies for each), `UssdReportingTest` (unregistered told at once and can't report with the full path either, health worker skips the code, district officer gives one), `AdminLive.IndexTest` (register a phone, bad format refused), webhook tests updated to register their senders.
+
+**Status:** pending `mix test` verification.
+
+---
