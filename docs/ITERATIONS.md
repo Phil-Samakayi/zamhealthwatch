@@ -903,6 +903,30 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `RiskLive.Index` supply alerts table (`#supply-alerts`); `DrugLive.Index` banner (`#supply-alerts`) and live scoping fix.
 - [x] Tests: `DrugAvailabilityTest` (latest per facility and medicine), `PredictiveAnalyticsTest` (alert fields and trend, in stock, no recent cases, unrelated medicine and measles, restock clears it, shortage at another facility, sort order), `RiskLive.IndexTest` (alert row, live alert on a new shortage), `DrugLive.IndexTest` (health worker sees only their facility's alert, no banner without one, live alert from a new case, live list scoping), `DemoTest` (the three demo alerts, Monze quiet).
 
-**Status:** pending `mix test` verification.
+**Status:** 620 tests, 0 failures, first run. Closed. Both known follow-ups are closed in Iteration 20.
+
+---
+
+## Iteration 20 — Closing Iteration 19's follow-ups
+
+**Goal:** fix the two problems Iteration 19 found and logged rather than carry them forward.
+
+**Decisions:**
+
+- **Live scoping on `/hospitals`, `/labs`, and `/vaccinations`.** Each one's `handle_info({:created, _})` streamed in every broadcast record, so a health worker's list picked up other facilities' submissions live until a reload: the same bug Iteration 18 fixed on `/cases` and Iteration 19 on `/drugs`. Each now checks the record against the page's own scope first:
+  - `/hospitals`: the report's facility.
+  - `/vaccinations`: the record's district, matched against the district of the health worker's facility. Coverage is reported per district.
+  - `/labs`: the facility of the test's case, looked up when the test arrives. The page's `@cases_by_id` only holds the cases that existed when it mounted, and a test on a case reported since then must still count.
+- **A second `/labs` leak.** The `{:updated, _}` handler checked scope, but its "not in scope" branch streamed the test in anyway, so resulting another facility's test put it on a health worker's page. That branch now does nothing.
+- **National Reporting's shortage count uses each medicine's latest count.** It counted every stock record a facility ever submitted, so a medicine since restocked still showed as short in the CSV. The "Drug stock records" column still counts every submission, since that's what it says. "Drug stock shortages" now counts medicines whose latest count is below the reorder level, the same rule as supply alerts.
+- **Not shared yet:** `in_scope?/2` now exists in five LiveViews with small differences (facility, district, case's facility). They're still kept per module, following this project's small-per-module-helper convention. A shared scope module is worth it if a sixth screen needs one.
+
+**Built:**
+
+- [x] `HospitalLive.Index`, `VaccinationLive.Index`, `LabLive.Index`: scoped `{:created, _}`; `LabLive.Index` scoped `{:updated, _}`.
+- [x] `NationalReporting.facility_summary/1`: shortages on latest counts.
+- [x] Tests: one live-scoping test each for `/hospitals` and `/vaccinations`, two for `/labs` (new test on a case reported after mount; another facility's test being resulted), and a rewritten `NationalReportingTest` shortage test (a restocked medicine no longer counts).
+
+**Status:** 624 tests, 0 failures, first run. Closed.
 
 ---
