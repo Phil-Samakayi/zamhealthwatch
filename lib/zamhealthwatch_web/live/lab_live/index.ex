@@ -440,13 +440,21 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
   defp check_scope(_params, {:locked, _facility_id}),
     do: {:error, "Select a case before requesting a test."}
 
+  # Only tests in this user's scope - on cases at their facility, for a
+  # health worker - are added (Iteration 20): before, every broadcast
+  # test was, so a health worker's page picked up other facilities'
+  # tests live until a reload.
   @impl true
   def handle_info({:created, %LabTest{} = lab_test}, socket) do
-    {:noreply,
-     socket
-     |> stream_insert(:lab_tests, lab_test, at: 0)
-     |> update(:lab_test_count, &(&1 + 1))
-     |> update(:lab_tests_by_id, &Map.put(&1, lab_test.id, lab_test))}
+    if in_scope?(socket.assigns.scope, lab_test) do
+      {:noreply,
+       socket
+       |> stream_insert(:lab_tests, lab_test, at: 0)
+       |> update(:lab_test_count, &(&1 + 1))
+       |> update(:lab_tests_by_id, &Map.put(&1, lab_test.id, lab_test))}
+    else
+      {:noreply, socket}
+    end
   end
 
   # A correction or withdrawal arrives as an ordinary `{:updated, _}` -
@@ -462,9 +470,24 @@ defmodule ZamHealthWatchWeb.LabLive.Index do
        |> assign_corrections()
        |> assign_correction_notices()}
     else
-      {:noreply, stream_insert(socket, :lab_tests, lab_test)}
+      # Not in this viewer's scope. Before Iteration 20 this branch still
+      # streamed the test in, which defeated the check above.
+      {:noreply, socket}
     end
   end
+
+  # A test's facility is its case's facility. Looked up rather than read
+  # from `@cases_by_id`, which only holds the cases that existed at
+  # mount - a test on a case reported since then must still count.
+  defp in_scope?(:unrestricted, _lab_test), do: true
+
+  defp in_scope?({:locked, facility_id}, %LabTest{case_id: case_id}) do
+    CaseManagement.get_case!(case_id).facility_id == facility_id
+  rescue
+    Ecto.NoResultsError -> false
+  end
+
+  defp in_scope?(_scope, _lab_test), do: false
 
   defp to_result(result) when result in ~w(positive negative inconclusive) do
     String.to_existing_atom(result)

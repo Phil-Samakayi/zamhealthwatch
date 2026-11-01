@@ -153,13 +153,24 @@ defmodule ZamHealthWatchWeb.HospitalLive.Index do
     end
   end
 
+  # Only reports in this user's scope are added (Iteration 20): before,
+  # every broadcast report was, so a health worker's list picked up other
+  # facilities' submissions live until a reload.
   @impl true
   def handle_info({:created, %CapacityReport{} = report}, socket) do
-    {:noreply,
-     socket
-     |> stream_insert(:capacity_reports, report, at: 0)
-     |> update(:record_count, &(&1 + 1))}
+    if in_scope?(socket.assigns.scope, report) do
+      {:noreply,
+       socket
+       |> stream_insert(:capacity_reports, report, at: 0)
+       |> update(:record_count, &(&1 + 1))}
+    else
+      {:noreply, socket}
+    end
   end
+
+  defp in_scope?(:unrestricted, _report), do: true
+  defp in_scope?({:locked, facility_id}, %CapacityReport{facility_id: facility_id}), do: true
+  defp in_scope?(_scope, _report), do: false
 
   # `reported_by_id` is never taken from client params - same pattern
   # every other LiveView in this project (`with_reporter/2`/

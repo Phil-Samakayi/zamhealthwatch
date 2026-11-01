@@ -149,6 +149,22 @@ defmodule ZamHealthWatchWeb.HospitalLive.IndexTest do
   end
 
   describe "facility scoping for health workers" do
+    test "a health_worker's list doesn't pick up reports submitted live at other facilities", %{
+      conn: conn
+    } do
+      own = facility_fixture()
+      other = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, own.id)
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/hospitals")
+
+      other_report = capacity_report_fixture(%{facility_id: other.id})
+      own_report = capacity_report_fixture(%{facility_id: own.id})
+
+      assert has_element?(lv, "#capacity_reports-#{own_report.id}")
+      refute has_element?(lv, "#capacity_reports-#{other_report.id}")
+    end
+
     test "an unassigned health_worker sees a get-assigned message instead of the form", %{
       conn: conn
     } do

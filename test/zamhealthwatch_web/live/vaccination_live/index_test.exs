@@ -146,6 +146,23 @@ defmodule ZamHealthWatchWeb.VaccinationLive.IndexTest do
   end
 
   describe "facility scoping for health workers" do
+    test "a health_worker's list doesn't pick up coverage reported live in other districts", %{
+      conn: conn
+    } do
+      own_district = district_fixture()
+      other_district = district_fixture()
+      facility = facility_fixture(%{district_id: own_district.id})
+      user = user_fixture() |> set_role(:health_worker, facility.id)
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/vaccinations")
+
+      other_record = vaccination_record_fixture(%{district_id: other_district.id})
+      own_record = vaccination_record_fixture(%{district_id: own_district.id})
+
+      assert has_element?(lv, "#vaccination_records-#{own_record.id}")
+      refute has_element?(lv, "#vaccination_records-#{other_record.id}")
+    end
+
     test "an unassigned health_worker sees a get-assigned message instead of the form", %{
       conn: conn
     } do

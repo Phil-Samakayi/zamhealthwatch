@@ -198,13 +198,25 @@ defmodule ZamHealthWatchWeb.VaccinationLive.Index do
     end
   end
 
+  # Only records in this user's scope - their facility's district, for a
+  # health worker - are added (Iteration 20): before, every broadcast
+  # record was, so a health worker's list picked up other districts'
+  # coverage live until a reload.
   @impl true
   def handle_info({:created, %VaccinationRecord{} = record}, socket) do
-    {:noreply,
-     socket
-     |> stream_insert(:vaccination_records, record, at: 0)
-     |> update(:record_count, &(&1 + 1))}
+    if in_scope?(socket.assigns.scope, record) do
+      {:noreply,
+       socket
+       |> stream_insert(:vaccination_records, record, at: 0)
+       |> update(:record_count, &(&1 + 1))}
+    else
+      {:noreply, socket}
+    end
   end
+
+  defp in_scope?(:unrestricted, _record), do: true
+  defp in_scope?({:locked, district_id}, %VaccinationRecord{district_id: district_id}), do: true
+  defp in_scope?(_scope, _record), do: false
 
   # `reported_by_id` is never taken from client params - same pattern
   # CaseLive.Index's `with_reporter/2` and LabLive.Index's

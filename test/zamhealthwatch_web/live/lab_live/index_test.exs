@@ -116,6 +116,40 @@ defmodule ZamHealthWatchWeb.LabLive.IndexTest do
   end
 
   describe "facility scoping for health workers" do
+    test "a health_worker's page doesn't pick up tests requested live at other facilities", %{
+      conn: conn
+    } do
+      own = facility_fixture()
+      other = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, own.id)
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/labs")
+
+      # Cases reported after mount, so the check can't rely on the cases
+      # the page loaded at the start.
+      other_test = lab_test_fixture(%{case_id: case_fixture(%{facility_id: other.id}).id})
+      own_test = lab_test_fixture(%{case_id: case_fixture(%{facility_id: own.id}).id})
+
+      assert has_element?(lv, "#lab_tests-#{own_test.id}")
+      refute has_element?(lv, "#lab_tests-#{other_test.id}")
+    end
+
+    test "a health_worker's page doesn't pick up another facility's test when it's resulted", %{
+      conn: conn
+    } do
+      own = facility_fixture()
+      other = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, own.id)
+      other_test = lab_test_fixture(%{case_id: case_fixture(%{facility_id: other.id}).id})
+      lab_officer = user_fixture() |> set_role(:lab_officer)
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/labs")
+
+      {:ok, _resulted} = LabReporting.record_result(other_test, :positive, lab_officer)
+
+      refute has_element?(lv, "#lab_tests-#{other_test.id}")
+    end
+
     test "an unassigned health_worker sees a get-assigned message instead of the form", %{
       conn: conn
     } do
