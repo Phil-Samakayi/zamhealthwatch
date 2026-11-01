@@ -955,7 +955,7 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] Test fixtures: `set_phone/2`, `phone_only_user_fixture/1`.
 - [x] Tests: `AccountsTest` (register, trim, format, duplicate, clear, lookup), `SmsReportingTest` (unregistered and role-less refused with no account or case created, health worker's own facility with and without its code, another facility's code refused, no facility, other roles must name one, replies for each), `UssdReportingTest` (unregistered told at once and can't report with the full path either, health worker skips the code, district officer gives one), `AdminLive.IndexTest` (register a phone, bad format refused), webhook tests updated to register their senders.
 
-**Status:** first run 647 tests, 1 failure: clearing a phone number crashed, because Ecto casts an empty value to `nil` before the trim ran, and `String.trim/1` doesn't accept `nil`. Fixed with a `trim_phone/1` that passes `nil` through and turns a value of only spaces into `nil` too. Confirmed with Iteration 22's run.
+**Status:** first run 647 tests, 1 failure: clearing a phone number crashed, because Ecto casts an empty value to `nil` before the trim ran, and `String.trim/1` doesn't accept `nil`. Fixed with a `trim_phone/1` that passes `nil` through and turns a value of only spaces into `nil` too. Re-run passing, confirmed by the project owner. Closed.
 
 ---
 
@@ -978,7 +978,7 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `token` added to `:filter_parameters`; `render.yaml` and README document the new variables and the callback URLs.
 - [x] Tests: `AfricasTalkingTest` (sandbox, live, and override endpoints), `WebhookTokenTest` (right token accepted; missing, wrong, and form-body tokens refused with nothing done; USSD guarded too; production without a token refuses everything; no token configured lets requests through).
 
-**Status:** live-verified: a USSD session from the Africa's Talking sandbox simulator reached the deployed app through the token-guarded callback, and unsubscribing worked end to end. `mix test` result still to be recorded.
+**Status:** live-verified: a USSD session from the Africa's Talking sandbox simulator reached the deployed app through the token-guarded callback, and unsubscribing worked end to end. `mix test` passing, confirmed by the project owner. Closed.
 
 ---
 
@@ -1000,6 +1000,6 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] New SMS and USSD replies for "already subscribed" and "not subscribed".
 - [x] Tests: `PublicAlertsTest` (both outcomes of each, blank number is an error, STOP trims, SMS replies for both new cases), `UssdReportingTest` (both new replies).
 
-**Status:** pending `mix test` verification.
+**Status:** `mix test` passing and the new replies checked, both confirmed by the project owner. Closed. This finishes the roadmap set after Iteration 15: demo reset, district risk scoring with vaccination, outcome correction, drug shortages linked to outbreaks, and Africa's Talking SMS, plus the registered-reporter and webhook-token safeguards real SMS needed first.
 
 ---
