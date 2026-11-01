@@ -44,7 +44,8 @@ defmodule ZamHealthWatch.DrugAvailabilityTest do
       older =
         older
         |> Ecto.Changeset.change(
-          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
+          inserted_at:
+            DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
         )
         |> ZamHealthWatch.Repo.update!()
 
@@ -57,6 +58,39 @@ defmodule ZamHealthWatch.DrugAvailabilityTest do
     test "returns an empty list for a facility with no records" do
       facility = facility_fixture()
       assert DrugAvailability.list_drug_stocks_by_facility(facility.id) == []
+    end
+  end
+
+  describe "latest_stock_by_facility_and_medicine/0" do
+    test "returns the most recent record for each facility and medicine" do
+      facility = facility_fixture()
+      other = facility_fixture()
+
+      older =
+        drug_stock_fixture(%{facility_id: facility.id, medicine: :ors, quantity_on_hand: 10})
+
+      older
+      |> Ecto.Changeset.change(
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60)
+      )
+      |> ZamHealthWatch.Repo.update!()
+
+      newer =
+        drug_stock_fixture(%{facility_id: facility.id, medicine: :ors, quantity_on_hand: 90})
+
+      al = drug_stock_fixture(%{facility_id: facility.id, medicine: :al})
+      other_ors = drug_stock_fixture(%{facility_id: other.id, medicine: :ors})
+
+      latest = DrugAvailability.latest_stock_by_facility_and_medicine()
+
+      assert map_size(latest) == 3
+      assert latest[{facility.id, :ors}].id == newer.id
+      assert latest[{facility.id, :al}].id == al.id
+      assert latest[{other.id, :ors}].id == other_ors.id
+    end
+
+    test "returns an empty map with no records" do
+      assert DrugAvailability.latest_stock_by_facility_and_medicine() == %{}
     end
   end
 

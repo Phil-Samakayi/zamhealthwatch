@@ -96,6 +96,31 @@ defmodule ZamHealthWatch.DrugAvailability do
   end
 
   @doc """
+  Returns the most recently reported record for each facility and
+  medicine, as `%{{facility_id, medicine} => DrugStock}`.
+
+  Built for `PredictiveAnalytics.list_supply_alerts/1` (Iteration 19):
+  a facility's current stock of a medicine is its latest submission, so
+  a shortage that has since been restocked stops counting. Same "latest
+  wins" rule as `HospitalCapacity.latest_capacity_by_facility/0`. A
+  facility/medicine pair with no record is simply absent.
+
+  ## Examples
+
+      iex> latest_stock_by_facility_and_medicine()
+      %{{"facility-uuid", :ors} => %DrugStock{}}
+
+  """
+  def latest_stock_by_facility_and_medicine do
+    Repo.all(
+      from d in DrugStock,
+        distinct: [d.facility_id, d.medicine],
+        order_by: [asc: d.facility_id, asc: d.medicine, desc: d.inserted_at]
+    )
+    |> Map.new(&{{&1.facility_id, &1.medicine}, &1})
+  end
+
+  @doc """
   Gets a single drug stock record.
 
   Raises `Ecto.NoResultsError` if it does not exist.
