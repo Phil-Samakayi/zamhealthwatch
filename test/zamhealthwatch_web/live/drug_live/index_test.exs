@@ -6,6 +6,7 @@ defmodule ZamHealthWatchWeb.DrugLive.IndexTest do
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.DrugAvailabilityFixtures
 
+  alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.DrugAvailability
 
   describe "Drug stock list" do
@@ -219,6 +220,92 @@ defmodule ZamHealthWatchWeb.DrugLive.IndexTest do
 
       assert [stock] = DrugAvailability.list_drug_stocks()
       assert stock.facility_id == facility.id
+    end
+  end
+
+  describe "supply alerts" do
+    test "a health worker sees their own facility's alert, not another facility's", %{conn: conn} do
+      own = facility_fixture(%{name: "Own Clinic"})
+      other = facility_fixture(%{name: "Other Clinic"})
+      user = user_fixture() |> set_role(:health_worker, own.id)
+
+      for facility <- [own, other] do
+        {:ok, _case} =
+          CaseManagement.create_case(%{
+            disease: :cholera,
+            facility_id: facility.id,
+            reported_by_id: user.id
+          })
+
+        drug_stock_fixture(%{
+          facility_id: facility.id,
+          medicine: :iv_fluids,
+          quantity_on_hand: 15,
+          reorder_level: 30
+        })
+      end
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/drugs")
+
+      assert has_element?(lv, "#supply-alert-#{own.id}-iv_fluids", "15 / 30")
+      assert has_element?(lv, "#supply-alert-#{own.id}-iv_fluids", "1 Cholera case")
+      refute has_element?(lv, "#supply-alert-#{other.id}-iv_fluids")
+    end
+
+    test "shows no alert banner when nothing short is needed", %{conn: conn} do
+      facility = facility_fixture()
+      user = user_fixture() |> set_role(:district_officer)
+
+      drug_stock_fixture(%{
+        facility_id: facility.id,
+        medicine: :al,
+        quantity_on_hand: 1,
+        reorder_level: 60
+      })
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/drugs")
+
+      refute has_element?(lv, "#supply-alerts")
+    end
+
+    test "an alert appears live when a case makes a shortage matter", %{conn: conn} do
+      facility = facility_fixture()
+      user = user_fixture() |> set_role(:district_officer)
+
+      drug_stock_fixture(%{
+        facility_id: facility.id,
+        medicine: :ors,
+        quantity_on_hand: 5,
+        reorder_level: 50
+      })
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/drugs")
+      refute has_element?(lv, "#supply-alert-#{facility.id}-ors")
+
+      {:ok, _case} =
+        CaseManagement.create_case(%{
+          disease: :cholera,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      assert has_element?(lv, "#supply-alert-#{facility.id}-ors")
+    end
+
+    test "a health worker's list doesn't pick up stock recorded live at other facilities", %{
+      conn: conn
+    } do
+      own = facility_fixture()
+      other = facility_fixture()
+      user = user_fixture() |> set_role(:health_worker, own.id)
+
+      {:ok, lv, _html} = conn |> log_in_user(user) |> live(~p"/drugs")
+
+      other_stock = drug_stock_fixture(%{facility_id: other.id})
+      own_stock = drug_stock_fixture(%{facility_id: own.id})
+
+      assert has_element?(lv, "#drug_stocks-#{own_stock.id}")
+      refute has_element?(lv, "#drug_stocks-#{other_stock.id}")
     end
   end
 

@@ -6,10 +6,12 @@ defmodule ZamHealthWatchWeb.RiskLive.IndexTest do
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.HospitalCapacityFixtures
   import ZamHealthWatch.VaccinationMonitoringFixtures
+  import ZamHealthWatch.DrugAvailabilityFixtures
 
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.HospitalCapacity
   alias ZamHealthWatch.VaccinationMonitoring
+  alias ZamHealthWatch.DrugAvailability
 
   describe "Outbreak risk" do
     test "redirects if user is not logged in", %{conn: conn} do
@@ -132,6 +134,67 @@ defmodule ZamHealthWatchWeb.RiskLive.IndexTest do
 
       assert lv |> element("#district-#{district.id}") |> render() =~
                "Cases with Measles-Rubella coverage at 47.5%"
+    end
+
+    test "lists a supply alert for a shortage where the medicine is needed", %{conn: conn} do
+      facility = facility_fixture(%{name: "Alert Clinic"})
+      user = user_fixture()
+
+      {:ok, _case} =
+        CaseManagement.create_case(%{
+          disease: :cholera,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      drug_stock_fixture(%{
+        facility_id: facility.id,
+        medicine: :ors,
+        quantity_on_hand: 40,
+        reorder_level: 100
+      })
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/risk")
+
+      row = lv |> element("#supply-alert-#{facility.id}-ors") |> render()
+      assert row =~ "Alert Clinic"
+      assert row =~ "ORS (Oral Rehydration Salts)"
+      assert row =~ "40 / 100"
+      assert row =~ "Cholera"
+      refute has_element?(lv, "#no-supply-alerts")
+    end
+
+    test "adds a supply alert live when a shortage is reported", %{conn: conn} do
+      facility = facility_fixture()
+      user = user_fixture()
+
+      {:ok, _case} =
+        CaseManagement.create_case(%{
+          disease: :malaria,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      {:ok, lv, _html} =
+        conn
+        |> log_in_user(user)
+        |> live(~p"/risk")
+
+      refute has_element?(lv, "#supply-alert-#{facility.id}-al")
+
+      {:ok, _stock} =
+        DrugAvailability.record_stock(%{
+          medicine: :al,
+          quantity_on_hand: 10,
+          reorder_level: 60,
+          facility_id: facility.id,
+          reported_by_id: user.id
+        })
+
+      assert has_element?(lv, "#supply-alert-#{facility.id}-al", "10 / 60")
     end
 
     test "updates a district live when vaccination coverage is reported", %{conn: conn} do

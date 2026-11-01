@@ -3,6 +3,8 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
 
   alias ZamHealthWatch.CaseManagement
   alias ZamHealthWatch.CaseManagement.Case
+  alias ZamHealthWatch.DrugAvailability
+  alias ZamHealthWatch.DrugAvailability.DrugStock
   alias ZamHealthWatch.HospitalCapacity
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics
@@ -16,7 +18,7 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
       <.header>
         Outbreak risk
         <:subtitle>
-          A trend read on the last four weeks of reported cases: per district and disease, then per facility alongside its latest hospital capacity status. Updates automatically as new cases, capacity reports, or vaccination coverage come in.
+          A trend read on the last four weeks of reported cases: per district and disease, then per facility alongside its latest hospital capacity status. Updates automatically as new cases, capacity reports, vaccination coverage, or stock counts come in.
         </:subtitle>
       </.header>
 
@@ -81,6 +83,34 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
         </:col>
       </.table>
 
+      <h2 class="text-lg font-semibold mt-6">Supply alerts</h2>
+      <p class="text-sm text-base-content/60">
+        Medicines below their reorder level at facilities with cases of a disease they treat in the last 4 weeks. A shortage of a medicine nobody there needs right now is a routine restock and isn't listed.
+      </p>
+
+      <p :if={@supply_alerts == []} id="no-supply-alerts" class="text-sm text-base-content/60 mt-4">
+        No shortages where the medicine is needed right now.
+      </p>
+
+      <.table
+        :if={@supply_alerts != []}
+        id="supply-alerts"
+        rows={@supply_alerts}
+        row_id={&"supply-alert-#{&1.facility_id}-#{&1.medicine}"}
+      >
+        <:col :let={alert} label="Facility">{alert.facility_name}</:col>
+        <:col :let={alert} label="Medicine">{DrugStock.medicine_label(alert.medicine)}</:col>
+        <:col :let={alert} label="On hand / reorder level">
+          {alert.quantity_on_hand} / {alert.reorder_level}
+        </:col>
+        <:col :let={alert} label="Needed for">
+          {Case.disease_label(alert.disease)}: {Enum.join(alert.weekly_counts, " → ")}
+          <span class={["badge badge-sm", tier_badge_class(alert.tier)]}>
+            {tier_label(alert.tier)}
+          </span>
+        </:col>
+      </.table>
+
       <h2 class="text-lg font-semibold mt-6">By facility</h2>
 
       <p :if={@risk_scores == []} id="no-risk-data" class="text-sm text-base-content/60 mt-4">
@@ -111,6 +141,7 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
       CaseManagement.subscribe_cases()
       HospitalCapacity.subscribe_capacity_reports()
       VaccinationMonitoring.subscribe_vaccination_records()
+      DrugAvailability.subscribe_drug_stocks()
     end
 
     {:ok, assign_risk_scores(socket)}
@@ -134,9 +165,12 @@ defmodule ZamHealthWatchWeb.RiskLive.Index do
   def handle_info({:created, %VaccinationRecord{}}, socket),
     do: {:noreply, assign_risk_scores(socket)}
 
+  def handle_info({:created, %DrugStock{}}, socket), do: {:noreply, assign_risk_scores(socket)}
+
   defp assign_risk_scores(socket) do
     socket
     |> assign(:district_risks, PredictiveAnalytics.list_district_risks())
+    |> assign(:supply_alerts, PredictiveAnalytics.list_supply_alerts())
     |> assign(:risk_scores, PredictiveAnalytics.list_risk_scores())
   end
 

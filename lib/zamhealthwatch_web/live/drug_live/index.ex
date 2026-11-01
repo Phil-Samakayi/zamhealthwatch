@@ -3,9 +3,12 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
 
   import ZamHealthWatchWeb.TimeHelpers, only: [time_ago: 1]
 
+  alias ZamHealthWatch.CaseManagement
+  alias ZamHealthWatch.CaseManagement.Case
   alias ZamHealthWatch.DrugAvailability
   alias ZamHealthWatch.DrugAvailability.DrugStock
   alias ZamHealthWatch.Geography
+  alias ZamHealthWatch.PredictiveAnalytics
 
   @impl true
   def render(assigns) do
@@ -17,6 +20,21 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
           Quantity on hand against a reorder level, by facility and medicine. A quantity below the reorder level is flagged as a shortage.
         </:subtitle>
       </.header>
+
+      <div :if={@supply_alerts != []} id="supply-alerts" class="alert alert-error">
+        <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+        <div>
+          <p class="font-semibold">Short where it's needed now</p>
+          <ul class="text-sm">
+            <li
+              :for={alert <- @supply_alerts}
+              id={"supply-alert-#{alert.facility_id}-#{alert.medicine}"}
+            >
+              {alert.facility_name}: {DrugStock.medicine_label(alert.medicine)} at {alert.quantity_on_hand} / {alert.reorder_level}, with {alert.case_count} {Case.disease_label(alert.disease)} {if alert.case_count == 1, do: "case", else: "cases"} in the last 4 weeks.
+            </li>
+          </ul>
+        </div>
+      </div>
 
       <div :if={@scope == :unassigned} class="alert alert-info">
         <.icon name="hero-information-circle" class="size-5 shrink-0" />
@@ -84,7 +102,10 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: DrugAvailability.subscribe_drug_stocks()
+    if connected?(socket) do
+      DrugAvailability.subscribe_drug_stocks()
+      CaseManagement.subscribe_cases()
+    end
 
     scope = facility_scope(socket.assigns.current_scope.user)
     facilities = Geography.list_facilities()
@@ -98,6 +119,7 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
       |> assign(:facility_options, Enum.map(facilities, &{&1.name, &1.id}))
       |> assign(:medicine_options, DrugStock.medicine_options())
       |> assign(:record_count, length(stocks))
+      |> assign_supply_alerts()
       |> assign_form(DrugAvailability.change_drug_stock(%DrugStock{}))
       |> stream(:drug_stocks, stocks)
 
@@ -150,12 +172,49 @@ defmodule ZamHealthWatchWeb.DrugLive.Index do
     end
   end
 
+  # Only stock in this user's scope is added to the list (before
+  # Iteration 19 every broadcast record was, so a health worker's list
+  # picked up other facilities' submissions until a reload). Alerts are
+  # recalculated either way, since they're scoped when assigned.
   @impl true
   def handle_info({:created, %DrugStock{} = stock}, socket) do
-    {:noreply,
-     socket
-     |> stream_insert(:drug_stocks, stock, at: 0)
-     |> update(:record_count, &(&1 + 1))}
+    socket = assign_supply_alerts(socket)
+
+    if in_scope?(socket.assigns.scope, stock) do
+      {:noreply,
+       socket
+       |> stream_insert(:drug_stocks, stock, at: 0)
+       |> update(:record_count, &(&1 + 1))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A new or reclassified case can start or stop an alert.
+  def handle_info({event, %Case{}}, socket) when event in [:created, :updated] do
+    {:noreply, assign_supply_alerts(socket)}
+  end
+
+  defp in_scope?(:unrestricted, _stock), do: true
+  defp in_scope?({:locked, facility_id}, %DrugStock{facility_id: facility_id}), do: true
+  defp in_scope?(_scope, _stock), do: false
+
+  # Shortages where the medicine is needed now (Iteration 19), limited
+  # to the health worker's own facility; everyone else sees them all.
+  defp assign_supply_alerts(socket) do
+    alerts =
+      case socket.assigns.scope do
+        :unrestricted ->
+          PredictiveAnalytics.list_supply_alerts()
+
+        :unassigned ->
+          []
+
+        {:locked, facility_id} ->
+          Enum.filter(PredictiveAnalytics.list_supply_alerts(), &(&1.facility_id == facility_id))
+      end
+
+    assign(socket, :supply_alerts, alerts)
   end
 
   # `reported_by_id` is never taken from client params - same pattern
