@@ -53,10 +53,10 @@ defmodule ZamHealthWatchWeb.AdminLive.IndexTest do
     end
 
     test "shows an SMS-only user by phone, not by placeholder text", %{conn: conn} do
-      {:ok, _reporter} = Accounts.find_or_create_sms_reporter("+260971234567")
+      phone_only_user_fixture("+260979300001")
       {:ok, _lv, html} = live(conn, ~p"/admin/users")
 
-      assert html =~ "+260971234567"
+      assert html =~ "+260979300001"
       refute html =~ "Unknown user"
     end
 
@@ -134,6 +134,36 @@ defmodule ZamHealthWatchWeb.AdminLive.IndexTest do
 
       assert has_element?(lv, row_selector(user), "MOH admin")
       assert Accounts.get_user!(user.id).role == :moh_admin
+    end
+
+    test "registers an SMS phone number along with the role", %{conn: conn} do
+      user = user_fixture()
+      {:ok, lv, _html} = live(conn, ~p"/admin/users")
+
+      lv
+      |> form(role_form_selector(user), %{
+        "role" => %{"role" => "health_worker", "phone" => "+260975550010"}
+      })
+      |> render_submit()
+
+      assert has_element?(lv, row_selector(user), "+260975550010")
+      assert Accounts.get_user!(user.id).phone == "+260975550010"
+    end
+
+    test "rejects a phone number that isn't in international format", %{conn: conn} do
+      user = user_fixture() |> set_role(:health_worker)
+      {:ok, lv, _html} = live(conn, ~p"/admin/users")
+
+      result =
+        lv
+        |> form(role_form_selector(user), %{
+          "role" => %{"role" => "health_worker", "phone" => "0975550011"}
+        })
+        |> render_submit()
+
+      assert result =~ "Couldn&#39;t update that role"
+      assert result =~ "must be in international format"
+      assert Accounts.get_user!(user.id).phone == nil
     end
 
     test "rejects clearing an already-assigned user's role and leaves it unchanged", %{

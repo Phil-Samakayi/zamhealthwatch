@@ -540,7 +540,8 @@ defmodule ZamHealthWatchWeb.CaseLive.Index do
 
   # Email for a web-registered reporter, phone for an SMS-only one
   # (Iteration 2's SmsReporting slice made `email` nullable and gave an
-  # SMS reporter only a `phone` - see `Accounts.find_or_create_sms_reporter/1`).
+  # SMS reporter only a `phone`; since Iteration 21 only registered users
+  # can report by SMS, but phone-only users created before then remain).
   # Falls back the same way `Map.get(@facilities_by_id, ..., "Unknown facility")`
   # already does for a dangling reference, even though `reported_by_id` is a
   # required, `on_delete: :restrict` FK (Iteration 1's audit-trail decision)

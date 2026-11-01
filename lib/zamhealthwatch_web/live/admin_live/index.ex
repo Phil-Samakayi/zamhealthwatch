@@ -30,7 +30,9 @@ defmodule ZamHealthWatchWeb.AdminLive.Index do
           Assign a role - and, for a health worker, optionally a facility - to every
           registered user. A user with no role assigned can still log in and report
           cases, but can't use anything role-gated yet (see the case list's
-          Confirm and outcome actions).
+          Confirm and outcome actions). Add an SMS phone number, in international
+          format, to let a user report cases by SMS or USSD - for health workers
+          whose facility has poor internet. Only registered numbers can report.
         </:subtitle>
       </.header>
 
@@ -43,6 +45,7 @@ defmodule ZamHealthWatchWeb.AdminLive.Index do
         <:col :let={user} label="Current facility">
           {Map.get(@facilities_by_id, user.facility_id, "-")}
         </:col>
+        <:col :let={user} label="SMS phone">{user.phone || "-"}</:col>
         <:col :let={user} label="Assign">
           <.form
             for={@forms[user.id]}
@@ -63,6 +66,12 @@ defmodule ZamHealthWatchWeb.AdminLive.Index do
               options={@facility_options}
               prompt="No facility"
               class="select select-sm"
+            />
+            <.input
+              field={@forms[user.id][:phone]}
+              type="text"
+              placeholder="+260971234567"
+              class="input input-sm"
             />
             <.button class="btn-sm" phx-disable-with="Saving...">Save</.button>
           </.form>

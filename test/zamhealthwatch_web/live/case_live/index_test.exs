@@ -6,7 +6,6 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.CaseManagementFixtures
 
-  alias ZamHealthWatch.Accounts
   alias ZamHealthWatch.CaseManagement
 
   describe "Case list" do
@@ -57,7 +56,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
     end
 
     test "shows an SMS-only reporter's phone number, not an email", %{conn: conn} do
-      {:ok, reporter} = Accounts.find_or_create_sms_reporter("+260971234567")
+      reporter = phone_only_user_fixture("+260979200001")
       case_fixture(%{reported_by_id: reporter.id})
 
       {:ok, _lv, html} =
@@ -65,7 +64,7 @@ defmodule ZamHealthWatchWeb.CaseLive.IndexTest do
         |> log_in_user(user_fixture())
         |> live(~p"/cases")
 
-      assert html =~ "+260971234567"
+      assert html =~ "+260979200001"
     end
   end
 
