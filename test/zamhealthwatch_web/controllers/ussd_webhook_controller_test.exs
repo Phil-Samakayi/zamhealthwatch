@@ -1,6 +1,7 @@
 defmodule ZamHealthWatchWeb.UssdWebhookControllerTest do
   use ZamHealthWatchWeb.ConnCase, async: true
 
+  import ZamHealthWatch.AccountsFixtures
   import ZamHealthWatch.GeographyFixtures
 
   alias ZamHealthWatch.CaseManagement
@@ -24,11 +25,15 @@ defmodule ZamHealthWatchWeb.UssdWebhookControllerTest do
     test "a full report path ends the session and creates a real case", %{conn: conn} do
       facility = facility_fixture(%{code: "UTH"})
 
+      # Only registered numbers can report (Iteration 21); a district
+      # officer names the facility.
+      user_fixture() |> set_role(:district_officer) |> set_phone("+260979400001")
+
       conn =
         post(conn, ~p"/webhooks/ussd", %{
           "sessionId" => "sess-2",
           "serviceCode" => "*384#",
-          "phoneNumber" => "+260971234567",
+          "phoneNumber" => "+260979400001",
           "text" => "1*1*UTH"
         })
 

@@ -109,24 +109,35 @@ defmodule ZamHealthWatch.UssdReporting do
 
   defp route([], _phone), do: {:continue, @main_menu}
 
-  defp route(["1"], _phone), do: {:continue, @disease_prompt}
+  # Reporting follows SMS's rules (Iteration 21): only a registered
+  # number may report, and it's told so straight away rather than after
+  # working through the menu. A health worker's report goes to their own
+  # facility, so they're never asked for a code - one step fewer on a
+  # poor connection. Any other role is asked which facility.
+  defp route(["1"], phone) do
+    case SmsReporting.reporter_kind(phone) do
+      :unregistered -> {:end, SmsReporting.confirmation_message({:error, :unregistered_number})}
+      _registered -> {:continue, @disease_prompt}
+    end
+  end
 
-  defp route(["1", disease_digit], _phone) do
-    if Map.has_key?(@disease_menu, disease_digit) do
-      {:continue, @facility_prompt}
-    else
-      {:end, @invalid_selection}
+  defp route(["1", disease_digit], phone) do
+    case Map.fetch(@disease_menu, disease_digit) do
+      {:ok, disease_token} ->
+        case SmsReporting.reporter_kind(phone) do
+          :names_facility -> {:continue, @facility_prompt}
+          _own_facility_or_unregistered -> report(phone, "REPORT #{disease_token}")
+        end
+
+      :error ->
+        {:end, @invalid_selection}
     end
   end
 
   defp route(["1", disease_digit, facility_code], phone) do
     case Map.fetch(@disease_menu, disease_digit) do
-      {:ok, disease_token} ->
-        result = SmsReporting.report_from_sms(phone, "REPORT #{disease_token} #{facility_code}")
-        {:end, SmsReporting.confirmation_message(result)}
-
-      :error ->
-        {:end, @invalid_selection}
+      {:ok, disease_token} -> report(phone, "REPORT #{disease_token} #{facility_code}")
+      :error -> {:end, @invalid_selection}
     end
   end
 
@@ -141,4 +152,9 @@ defmodule ZamHealthWatch.UssdReporting do
   end
 
   defp route(_other, _phone), do: {:end, @invalid_selection}
+
+  # SmsReporting applies every rule (registration, facility) itself.
+  defp report(phone, text) do
+    {:end, phone |> SmsReporting.report_from_sms(text) |> SmsReporting.confirmation_message()}
+  end
 end

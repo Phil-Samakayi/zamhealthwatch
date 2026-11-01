@@ -1,6 +1,7 @@
 defmodule ZamHealthWatchWeb.SmsWebhookControllerTest do
   use ZamHealthWatchWeb.ConnCase, async: false
 
+  import ZamHealthWatch.AccountsFixtures
   import ZamHealthWatch.GeographyFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
@@ -27,6 +28,9 @@ defmodule ZamHealthWatchWeb.SmsWebhookControllerTest do
   describe "POST /webhooks/sms" do
     test "responds 200 and actually creates a case for a well-formed inbound SMS", %{conn: conn} do
       facility = facility_fixture(%{code: "UTH"})
+
+      # Only registered numbers can report (Iteration 21).
+      user_fixture() |> set_role(:health_worker, facility.id) |> set_phone("+260971234567")
 
       conn =
         post(conn, ~p"/webhooks/sms", %{

@@ -2,6 +2,7 @@ defmodule ZamHealthWatch.SmsReportingTest do
   use ZamHealthWatch.DataCase, async: false
 
   import ExUnit.CaptureLog
+  import ZamHealthWatch.AccountsFixtures
   import ZamHealthWatch.GeographyFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
@@ -11,70 +12,138 @@ defmodule ZamHealthWatch.SmsReportingTest do
   alias ZamHealthWatch.SmsReporting
   alias ZamHealthWatch.SmsReporting.Pipeline
 
-  describe "report_from_sms/2" do
-    test "creates a case from a well-formed report" do
-      facility = facility_fixture(%{code: "UTH"})
+  describe "report_from_sms/2 - who can report" do
+    test "refuses an unregistered number, creating no account and no case" do
+      facility_fixture(%{code: "UTH"})
+      users_before = length(Accounts.list_users())
 
-      assert {:ok, case_record} =
-               SmsReporting.report_from_sms("+260971234567", "REPORT CHOLERA UTH")
+      assert SmsReporting.report_from_sms("+260970000000", "REPORT CHOLERA UTH") ==
+               {:error, :unregistered_number}
+
+      assert length(Accounts.list_users()) == users_before
+      assert CaseManagement.list_cases() == []
+    end
+
+    test "refuses a registered number on an account with no role" do
+      phone_only_user_fixture("+260970000001")
+
+      assert SmsReporting.report_from_sms("+260970000001", "REPORT CHOLERA") ==
+               {:error, :unregistered_number}
+    end
+
+    test "refuses an unregistered number before reading the text" do
+      assert SmsReporting.report_from_sms("+260970000000", "hello") ==
+               {:error, :unregistered_number}
+    end
+
+    test "reporter_kind/1 tells USSD what to ask next" do
+      facility = facility_fixture()
+      reporter(:health_worker, facility, "+260971000001")
+      reporter(:district_officer, nil, "+260971000002")
+
+      assert SmsReporting.reporter_kind("+260971000001") == :own_facility
+      assert SmsReporting.reporter_kind("+260971000002") == :names_facility
+      assert SmsReporting.reporter_kind("+260970000000") == :unregistered
+    end
+  end
+
+  describe "report_from_sms/2 - a health worker" do
+    setup do
+      facility = facility_fixture(%{code: "KBW", name: "Kabwata Clinic"})
+      worker = reporter(:health_worker, facility, "+260971234567")
+      %{facility: facility, worker: worker}
+    end
+
+    test "records REPORT <DISEASE> at their own facility, as them", %{
+      facility: facility,
+      worker: worker
+    } do
+      assert {:ok, case_record} = SmsReporting.report_from_sms(worker.phone, "REPORT CHOLERA")
 
       assert case_record.disease == :cholera
       assert case_record.facility_id == facility.id
+      assert case_record.reported_by_id == worker.id
       assert case_record.status == :suspected
     end
 
-    test "is case-insensitive and tolerates extra whitespace" do
+    test "accepts their own facility code too", %{facility: facility, worker: worker} do
+      assert {:ok, case_record} = SmsReporting.report_from_sms(worker.phone, "REPORT MALARIA KBW")
+      assert case_record.facility_id == facility.id
+    end
+
+    test "refuses another facility's code, as the web form does", %{worker: worker} do
       facility_fixture(%{code: "UTH"})
 
+      assert SmsReporting.report_from_sms(worker.phone, "REPORT CHOLERA UTH") ==
+               {:error, {:wrong_facility, "UTH", "KBW"}}
+
+      assert CaseManagement.list_cases() == []
+    end
+
+    test "is case-insensitive and tolerates extra whitespace", %{worker: worker} do
       assert {:ok, case_record} =
-               SmsReporting.report_from_sms("+260971234567", "  report   cholera   uth  ")
+               SmsReporting.report_from_sms(worker.phone, "  report   cholera  ")
 
       assert case_record.disease == :cholera
     end
 
-    test "accepts COVID as an alias for covid19" do
-      facility_fixture(%{code: "UTH"})
+    test "matches the sender's number with surrounding whitespace", %{worker: worker} do
+      assert {:ok, _case} = SmsReporting.report_from_sms(" #{worker.phone} ", "REPORT CHOLERA")
+    end
 
-      assert {:ok, case_record} = SmsReporting.report_from_sms("+260971234567", "REPORT COVID UTH")
+    test "accepts COVID as an alias for covid19", %{worker: worker} do
+      assert {:ok, case_record} = SmsReporting.report_from_sms(worker.phone, "REPORT COVID")
       assert case_record.disease == :covid19
     end
 
-    test "finds or creates a user by phone, reusing it across reports" do
-      facility_fixture(%{code: "UTH"})
-      phone = "+260971234567"
-
-      assert {:ok, case_a} = SmsReporting.report_from_sms(phone, "REPORT CHOLERA UTH")
-      assert {:ok, case_b} = SmsReporting.report_from_sms(phone, "REPORT MALARIA UTH")
-
-      assert case_a.reported_by_id == case_b.reported_by_id
-
-      assert {:ok, user} = Accounts.find_or_create_sms_reporter(phone)
-      assert user.id == case_a.reported_by_id
-      assert user.role == nil
+    test "rejects unparseable text", %{worker: worker} do
+      assert SmsReporting.report_from_sms(worker.phone, "hello") == {:error, :unrecognized_format}
     end
 
-    test "rejects unparseable text" do
-      assert {:error, :unrecognized_format} =
-               SmsReporting.report_from_sms("+260971234567", "hello")
+    test "rejects an unrecognized disease", %{worker: worker} do
+      assert SmsReporting.report_from_sms(worker.phone, "REPORT FLU") ==
+               {:error, {:unknown_disease, "FLU"}}
     end
 
-    test "rejects an unrecognized disease" do
-      facility_fixture(%{code: "UTH"})
+    test "refuses a health worker with no facility" do
+      worker = reporter(:health_worker, nil, "+260971999999")
 
-      assert {:error, {:unknown_disease, "FLU"}} =
-               SmsReporting.report_from_sms("+260971234567", "REPORT FLU UTH")
+      assert SmsReporting.report_from_sms(worker.phone, "REPORT CHOLERA") ==
+               {:error, :no_facility}
+    end
+  end
+
+  describe "report_from_sms/2 - other roles" do
+    setup do
+      %{officer: reporter(:district_officer, nil, "+260972222222")}
     end
 
-    test "rejects an unknown facility code" do
-      assert {:error, {:unknown_facility, "NOPE"}} =
-               SmsReporting.report_from_sms("+260971234567", "REPORT CHOLERA NOPE")
+    test "records a report at the facility named", %{officer: officer} do
+      facility = facility_fixture(%{code: "UTH"})
+
+      assert {:ok, case_record} =
+               SmsReporting.report_from_sms(officer.phone, "REPORT CHOLERA UTH")
+
+      assert case_record.facility_id == facility.id
+      assert case_record.reported_by_id == officer.id
+    end
+
+    test "must name a facility", %{officer: officer} do
+      assert SmsReporting.report_from_sms(officer.phone, "REPORT CHOLERA") ==
+               {:error, :facility_code_required}
+    end
+
+    test "rejects an unknown facility code", %{officer: officer} do
+      assert SmsReporting.report_from_sms(officer.phone, "REPORT CHOLERA NOPE") ==
+               {:error, {:unknown_facility, "NOPE"}}
     end
   end
 
   describe "confirmation_message/1" do
     test "confirms success, naming the disease and facility" do
       facility = facility_fixture(%{code: "UTH", name: "UTH"})
-      {:ok, case_record} = SmsReporting.report_from_sms("+260971234567", "REPORT CHOLERA UTH")
+      worker = reporter(:health_worker, facility, "+260971234567")
+      {:ok, case_record} = SmsReporting.report_from_sms(worker.phone, "REPORT CHOLERA")
 
       message = SmsReporting.confirmation_message({:ok, case_record})
 
@@ -95,6 +164,28 @@ defmodule ZamHealthWatch.SmsReportingTest do
     test "names the unrecognized facility code" do
       message = SmsReporting.confirmation_message({:error, {:unknown_facility, "NOPE"}})
       assert message =~ "NOPE"
+    end
+
+    test "tells an unregistered number how to get registered" do
+      message = SmsReporting.confirmation_message({:error, :unregistered_number})
+      assert message =~ "isn't registered"
+      assert message =~ "MOH administrator"
+    end
+
+    test "tells a health worker which facility they can report for" do
+      message = SmsReporting.confirmation_message({:error, {:wrong_facility, "UTH", "KBW"}})
+      assert message =~ "own facility (KBW)"
+      assert message =~ "not UTH"
+    end
+
+    test "asks other roles for a facility code" do
+      message = SmsReporting.confirmation_message({:error, :facility_code_required})
+      assert message =~ "facility code"
+    end
+
+    test "explains a missing facility on the account" do
+      message = SmsReporting.confirmation_message({:error, :no_facility})
+      assert message =~ "no facility"
     end
 
     test "falls back to a generic message for any other error" do
@@ -136,12 +227,13 @@ defmodule ZamHealthWatch.SmsReportingTest do
 
     test "a pushed message flows through Producer -> Pipeline -> a real case, and replies" do
       facility = facility_fixture(%{code: "NTH"})
+      reporter(:health_worker, facility, "+260977000111")
       name = :"sms_pipeline_test_#{System.unique_integer([:positive])}"
       start_supervised!({Pipeline, name: name})
 
       log =
         capture_log(fn ->
-          Pipeline.push(name, %{from: "+260977000111", text: "REPORT TYPHOID NTH"})
+          Pipeline.push(name, %{from: "+260977000111", text: "REPORT TYPHOID"})
 
           wait_until(fn ->
             Enum.any?(CaseManagement.list_cases(), &(&1.facility_id == facility.id))
@@ -159,6 +251,8 @@ defmodule ZamHealthWatch.SmsReportingTest do
     end
 
     test "a rejected message doesn't crash the pipeline or create a case, and still replies" do
+      facility = facility_fixture(%{code: "MMH"})
+      reporter(:health_worker, facility, "+260977000111")
       name = :"sms_pipeline_test_#{System.unique_integer([:positive])}"
       start_supervised!({Pipeline, name: name})
 
@@ -170,8 +264,7 @@ defmodule ZamHealthWatch.SmsReportingTest do
           # this only passes if the pipeline is still alive and taking
           # demand right after rejecting a message, not just that a case
           # never appears.
-          facility_fixture(%{code: "MMH"})
-          Pipeline.push(name, %{from: "+260977000111", text: "REPORT MEASLES MMH"})
+          Pipeline.push(name, %{from: "+260977000111", text: "REPORT MEASLES"})
 
           wait_until(fn -> CaseManagement.list_cases() != [] end)
         end)
@@ -182,6 +275,14 @@ defmodule ZamHealthWatch.SmsReportingTest do
       # The rejected message's own reply (not the accepted one's).
       assert log =~ "couldn't read that report"
     end
+  end
+
+  # A user with `role` (and `facility`, or nil) whose `phone` is
+  # registered for SMS reporting.
+  defp reporter(role, facility, phone) do
+    user_fixture()
+    |> set_role(role, facility && facility.id)
+    |> set_phone(phone)
   end
 
   defp wait_until(fun, attempts \\ 50) do
