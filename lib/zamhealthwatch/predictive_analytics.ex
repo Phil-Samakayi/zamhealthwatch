@@ -16,6 +16,9 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
       vaccine prevents: measles cases in a district whose latest
       measles-rubella coverage is below 95% raise measles, and so the
       district, to `:high`. See `@vaccine_for` below.
+    * `list_supply_alerts/1` (Iteration 19) - medicine shortages at
+      facilities that have cases of a disease the medicine treats. See
+      `@medicines_for` below.
     * `list_risk_scores/1` - the original per-facility read, all
       diseases together, with the facility's hospital capacity status
       beside it. Kept because capacity is reported per facility and a
@@ -55,9 +58,25 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
   `Geography` above.
   """
 
-  alias ZamHealthWatch.{CaseManagement, Geography, HospitalCapacity, VaccinationMonitoring}
+  alias ZamHealthWatch.{
+    CaseManagement,
+    DrugAvailability,
+    Geography,
+    HospitalCapacity,
+    VaccinationMonitoring
+  }
+
+  alias ZamHealthWatch.DrugAvailability.DrugStock
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
-  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, ImmunityStatus, RiskScore}
+
+  alias ZamHealthWatch.PredictiveAnalytics.{
+    DiseaseTrend,
+    DistrictRisk,
+    ImmunityStatus,
+    RiskScore,
+    SupplyAlert
+  }
+
   alias ZamHealthWatch.VaccinationMonitoring.VaccinationRecord
 
   @weeks 4
@@ -85,6 +104,31 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
 
   @doc "The coverage rate below which a district has an immunity gap, as a fraction."
   def immunity_threshold, do: @immunity_threshold
+
+  # Which tracked medicines treat which disease (Iteration 19), limited
+  # to the five medicines DrugStock records:
+  #
+  #   * Cholera: rehydration is the treatment - ORS for mild or moderate
+  #     dehydration, IV Ringer's lactate for severe. Antibiotics are only
+  #     for severe cases, and the first-line ones (doxycycline,
+  #     azithromycin) aren't tracked. Ciprofloxacin is left out on
+  #     purpose: reduced susceptibility makes it a poor cholera choice.
+  #   * Malaria: artemether-lumefantrine, first-line for uncomplicated
+  #     malaria.
+  #   * Typhoid: ciprofloxacin and ceftriaxone, both among WHO's
+  #     recommended options, with local resistance deciding between them.
+  #
+  # Measles and COVID-19 have no tracked medicine, so they never raise a
+  # supply alert. Adding a medicine to DrugStock and a pair here is all
+  # it takes to extend this.
+  @medicines_for %{
+    cholera: [:ors, :iv_fluids],
+    malaria: [:al],
+    typhoid: [:ciprofloxacin, :ceftriaxone]
+  }
+
+  @doc "The tracked medicines that treat `disease`, or `[]`."
+  def medicines_for(disease), do: Map.get(@medicines_for, disease, [])
 
   @doc """
   Returns one `RiskScore` per known facility, highest recent case count
@@ -147,12 +191,8 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
 
     buckets =
       now
-      |> weekly_windows()
-      |> Enum.map(fn {start_dt, end_dt} ->
-        start_dt
-        |> CaseManagement.count_cases_by_facility_and_disease_between(end_dt)
-        |> by_district_and_disease(district_by_facility)
-      end)
+      |> facility_disease_buckets()
+      |> Enum.map(&by_district_and_disease(&1, district_by_facility))
 
     coverage_by_disease =
       Map.new(@vaccine_for, fn {disease, antigen} ->
@@ -162,6 +202,60 @@ defmodule ZamHealthWatch.PredictiveAnalytics do
     Geography.list_districts()
     |> Enum.map(&build_district_risk(&1, buckets, coverage_by_disease))
     |> Enum.sort_by(&{-Map.fetch!(@tier_rank, &1.tier), -&1.recent_count, &1.district_name})
+  end
+
+  @doc """
+  Returns a `SupplyAlert` for every medicine below its reorder level at
+  a facility that had cases of a disease it treats in the last four
+  weeks, worst trend first.
+
+  Stock is each facility's latest submission per medicine, so a
+  shortage that has since been restocked no longer alerts. A facility
+  with no stock record for a medicine raises nothing: an unreported
+  stock isn't assumed to be short.
+
+  Same `now` argument as `list_risk_scores/1`, for the same reason.
+  """
+  def list_supply_alerts(now \\ DateTime.utc_now()) do
+    buckets = facility_disease_buckets(now)
+    stock = DrugAvailability.latest_stock_by_facility_and_medicine()
+    facility_names = Map.new(Geography.list_facilities(), &{&1.id, &1.name})
+
+    buckets
+    |> Enum.flat_map(&Map.keys/1)
+    |> Enum.uniq()
+    |> Enum.flat_map(fn {facility_id, disease} = key ->
+      counts = Enum.map(buckets, &Map.get(&1, key, 0))
+
+      for medicine <- medicines_for(disease),
+          %DrugStock{} = record <- [Map.get(stock, {facility_id, medicine})],
+          DrugStock.shortage?(record) do
+        %SupplyAlert{
+          facility_id: facility_id,
+          facility_name: Map.get(facility_names, facility_id, "Unknown facility"),
+          disease: disease,
+          weekly_counts: counts,
+          case_count: Enum.sum(counts),
+          tier: tier_for(counts, trend_slope(counts)),
+          medicine: medicine,
+          quantity_on_hand: record.quantity_on_hand,
+          reorder_level: record.reorder_level
+        }
+      end
+    end)
+    |> Enum.sort_by(
+      &{-Map.fetch!(@tier_rank, &1.tier), -&1.case_count, &1.facility_name, &1.medicine}
+    )
+  end
+
+  # The four weekly `%{{facility_id, disease} => count}` maps, oldest
+  # first, that both the district read and supply alerts build on.
+  defp facility_disease_buckets(now) do
+    now
+    |> weekly_windows()
+    |> Enum.map(fn {start_dt, end_dt} ->
+      CaseManagement.count_cases_by_facility_and_disease_between(start_dt, end_dt)
+    end)
   end
 
   # Folds `%{{facility_id, disease} => count}` into

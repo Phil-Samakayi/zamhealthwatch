@@ -3,11 +3,19 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
 
   alias ZamHealthWatch.HospitalCapacity.CapacityReport
   alias ZamHealthWatch.PredictiveAnalytics
-  alias ZamHealthWatch.PredictiveAnalytics.{DiseaseTrend, DistrictRisk, ImmunityStatus, RiskScore}
+
+  alias ZamHealthWatch.PredictiveAnalytics.{
+    DiseaseTrend,
+    DistrictRisk,
+    ImmunityStatus,
+    RiskScore,
+    SupplyAlert
+  }
 
   import ZamHealthWatch.GeographyFixtures
   import ZamHealthWatch.HospitalCapacityFixtures
   import ZamHealthWatch.VaccinationMonitoringFixtures
+  import ZamHealthWatch.DrugAvailabilityFixtures
 
   # A fixed reference point rather than DateTime.utc_now/0, so every
   # case below lands in a known, predictable one of the four weekly
@@ -112,7 +120,8 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
 
       older
       |> Ecto.Changeset.change(
-        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
+        inserted_at:
+          DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60, :second)
       )
       |> ZamHealthWatch.Repo.update!()
 
@@ -315,6 +324,130 @@ defmodule ZamHealthWatch.PredictiveAnalyticsTest do
       assert PredictiveAnalytics.list_district_risks(@now) |> Enum.map(& &1.tier) ==
                [:high, :elevated]
     end
+  end
+
+  describe "list_supply_alerts/1" do
+    test "alerts on a shortage of a medicine for a disease the facility has cases of" do
+      facility = facility_fixture(%{name: "Kabwata Clinic"})
+      report_disease_weeks_ago(facility, :cholera, 1)
+      report_disease_weeks_ago(facility, :cholera, 0)
+      report_disease_weeks_ago(facility, :cholera, 0)
+
+      drug_stock_fixture(%{
+        facility_id: facility.id,
+        medicine: :ors,
+        quantity_on_hand: 40,
+        reorder_level: 100
+      })
+
+      assert [%SupplyAlert{} = alert] = PredictiveAnalytics.list_supply_alerts(@now)
+      assert alert.facility_id == facility.id
+      assert alert.facility_name == "Kabwata Clinic"
+      assert {alert.disease, alert.medicine} == {:cholera, :ors}
+      assert alert.weekly_counts == [0, 0, 1, 2]
+      assert alert.case_count == 3
+      assert alert.tier == :elevated
+      assert {alert.quantity_on_hand, alert.reorder_level} == {40, 100}
+    end
+
+    test "doesn't alert when the medicine is in stock" do
+      facility = facility_fixture()
+      report_disease_weeks_ago(facility, :cholera, 0)
+
+      drug_stock_fixture(%{
+        facility_id: facility.id,
+        medicine: :ors,
+        quantity_on_hand: 100,
+        reorder_level: 100
+      })
+
+      assert PredictiveAnalytics.list_supply_alerts(@now) == []
+    end
+
+    test "treats a shortage with no recent cases of the disease as a routine restock" do
+      facility = facility_fixture()
+      report_case_at(facility, DateTime.add(@now, -40, :day), :malaria)
+
+      drug_stock_fixture(%{
+        facility_id: facility.id,
+        medicine: :al,
+        quantity_on_hand: 30,
+        reorder_level: 60
+      })
+
+      assert PredictiveAnalytics.list_supply_alerts(@now) == []
+    end
+
+    test "ignores a shortage of a medicine that doesn't treat the facility's disease" do
+      facility = facility_fixture()
+      report_disease_weeks_ago(facility, :cholera, 0)
+      report_disease_weeks_ago(facility, :measles, 0)
+
+      for medicine <- [:ciprofloxacin, :ceftriaxone, :al] do
+        drug_stock_fixture(%{
+          facility_id: facility.id,
+          medicine: medicine,
+          quantity_on_hand: 1,
+          reorder_level: 50
+        })
+      end
+
+      assert PredictiveAnalytics.list_supply_alerts(@now) == []
+    end
+
+    test "uses each facility's latest stock record, so a restock clears the alert" do
+      facility = facility_fixture()
+      report_disease_weeks_ago(facility, :typhoid, 0)
+
+      facility
+      |> stock(:ceftriaxone, 5)
+      |> Ecto.Changeset.change(
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60)
+      )
+      |> ZamHealthWatch.Repo.update!()
+
+      stock(facility, :ceftriaxone, 80)
+
+      assert PredictiveAnalytics.list_supply_alerts(@now) == []
+    end
+
+    test "only alerts on a shortage at the facility with the cases" do
+      with_cases = facility_fixture()
+      without_cases = facility_fixture()
+      report_disease_weeks_ago(with_cases, :malaria, 0)
+      stock(without_cases, :al, 1)
+
+      assert PredictiveAnalytics.list_supply_alerts(@now) == []
+    end
+
+    test "sorts the worst trend first" do
+      rising = facility_fixture(%{name: "Rising"})
+      steady = facility_fixture(%{name: "Steady"})
+
+      for weeks_ago <- 3..0//-1, _n <- 1..(4 - weeks_ago) do
+        report_disease_weeks_ago(rising, :typhoid, weeks_ago)
+      end
+
+      for weeks_ago <- 3..0//-1, do: report_disease_weeks_ago(steady, :typhoid, weeks_ago)
+
+      stock(steady, :ciprofloxacin, 1)
+      stock(rising, :ceftriaxone, 1)
+
+      assert PredictiveAnalytics.list_supply_alerts(@now)
+             |> Enum.map(&{&1.facility_name, &1.tier}) ==
+               [{"Rising", :elevated}, {"Steady", :stable}]
+    end
+  end
+
+  # A stock record for `medicine` at `facility`: `quantity` on hand
+  # against a reorder level of 50.
+  defp stock(facility, medicine, quantity) do
+    drug_stock_fixture(%{
+      facility_id: facility.id,
+      medicine: medicine,
+      quantity_on_hand: quantity,
+      reorder_level: 50
+    })
   end
 
   # A measles-rubella coverage record for `district` at `percent`% of a

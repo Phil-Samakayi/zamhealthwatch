@@ -148,6 +148,22 @@ defmodule ZamHealthWatch.DemoTest do
       assert scores[facilities["MMH"].id].tier == :stable
     end
 
+    test "raises supply alerts only where the short medicine is needed" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      Demo.seed_activity!(now)
+
+      # Kabwata's cholera outbreak with ORS and IV fluids short, and UTH's
+      # typhoid case with ceftriaxone short. Monze's artemether-lumefantrine
+      # shortage stays quiet: its only malaria case is six weeks old.
+      assert now
+             |> PredictiveAnalytics.list_supply_alerts()
+             |> Enum.map(&{&1.facility_name, &1.disease, &1.medicine, &1.tier}) == [
+               {"Kabwata Clinic", :cholera, :iv_fluids, :elevated},
+               {"Kabwata Clinic", :cholera, :ors, :elevated},
+               {"University Teaching Hospital", :typhoid, :ceftriaxone, :stable}
+             ]
+    end
+
     test "shapes the district risk: Monze high from its measles immunity gap, Lusaka elevated, Ndola stable" do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
       Demo.seed_activity!(now)
