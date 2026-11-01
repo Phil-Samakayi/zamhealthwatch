@@ -106,13 +106,24 @@ defmodule ZamHealthWatch.NationalReportingTest do
       assert FacilitySummary.issued_lab_results(summary) == 1
     end
 
-    test "counts drug stock records and flags shortages" do
+    test "counts every drug stock record, but shortages on each medicine's latest count only" do
       facility = facility_fixture()
-      drug_stock_fixture(%{facility_id: facility.id, quantity_on_hand: 10, reorder_level: 50})
-      drug_stock_fixture(%{facility_id: facility.id, quantity_on_hand: 60, reorder_level: 50})
+
+      # ORS was short, then restocked: no longer a shortage.
+      facility.id
+      |> stock(:ors, 10)
+      |> Ecto.Changeset.change(
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-60)
+      )
+      |> ZamHealthWatch.Repo.update!()
+
+      stock(facility.id, :ors, 60)
+
+      # Artemether-lumefantrine is short now.
+      stock(facility.id, :al, 10)
 
       assert [summary] = NationalReporting.facility_summary()
-      assert summary.drug_stock_count == 2
+      assert summary.drug_stock_count == 3
       assert summary.drug_shortage_count == 1
     end
 
@@ -197,5 +208,14 @@ defmodule ZamHealthWatch.NationalReportingTest do
 
       assert csv =~ "\"Routine, catch-up\""
     end
+  end
+
+  defp stock(facility_id, medicine, quantity) do
+    drug_stock_fixture(%{
+      facility_id: facility_id,
+      medicine: medicine,
+      quantity_on_hand: quantity,
+      reorder_level: 50
+    })
   end
 end

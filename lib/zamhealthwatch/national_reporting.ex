@@ -130,7 +130,12 @@ defmodule ZamHealthWatch.NationalReporting do
       |> LabReporting.list_lab_tests_by_facility()
       |> Enum.frequencies_by(& &1.status)
 
+    # Newest first, so `uniq_by/2` keeps each medicine's latest count.
+    # Shortages are counted on those only (Iteration 20): before, every
+    # record ever submitted counted, so a medicine since restocked still
+    # showed as short.
     drug_stocks = DrugAvailability.list_drug_stocks_by_facility(facility.id)
+    current_stock = Enum.uniq_by(drug_stocks, & &1.medicine)
 
     %FacilitySummary{
       facility_id: facility.id,
@@ -140,7 +145,7 @@ defmodule ZamHealthWatch.NationalReporting do
       cases_by_outcome: cases_by_outcome,
       lab_tests_by_status: lab_tests_by_status,
       drug_stock_count: length(drug_stocks),
-      drug_shortage_count: Enum.count(drug_stocks, &DrugStock.shortage?/1),
+      drug_shortage_count: Enum.count(current_stock, &DrugStock.shortage?/1),
       risk: Map.get(risk_by_facility, facility.id)
     }
   end
