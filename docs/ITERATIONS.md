@@ -955,6 +955,29 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] Test fixtures: `set_phone/2`, `phone_only_user_fixture/1`.
 - [x] Tests: `AccountsTest` (register, trim, format, duplicate, clear, lookup), `SmsReportingTest` (unregistered and role-less refused with no account or case created, health worker's own facility with and without its code, another facility's code refused, no facility, other roles must name one, replies for each), `UssdReportingTest` (unregistered told at once and can't report with the full path either, health worker skips the code, district officer gives one), `AdminLive.IndexTest` (register a phone, bad format refused), webhook tests updated to register their senders.
 
-**Status:** pending `mix test` verification.
+**Status:** first run 647 tests, 1 failure: clearing a phone number crashed, because Ecto casts an empty value to `nil` before the trim ran, and `String.trim/1` doesn't accept `nil`. Fixed with a `trim_phone/1` that passes `nil` through and turns a value of only spaces into `nil` too. Confirmed with Iteration 22's run.
+
+---
+
+## Iteration 22 — Africa's Talking sandbox, and securing the webhooks
+
+**Goal:** make real SMS work against the Africa's Talking sandbox account the project owner set up and configured on Render, and close the open-webhook gap before any real traffic arrives.
+
+**Decisions:**
+
+- **The sandbox has its own endpoint.** Africa's Talking's help centre lists `https://api.sandbox.africastalking.com/version1/messaging` for the sandbox and `https://api.africastalking.com/version1/messaging` for live, and the live endpoint rejects sandbox credentials. `SmsGateway.AfricasTalking` always used the live one, so sandbox sends would have failed. The base URL now follows the username, which is always `sandbox` for the sandbox account. `AFRICAS_TALKING_BASE_URL` can override it.
+- **Webhooks must carry a shared secret.** `/webhooks/sms` and `/webhooks/ussd` took no authentication at all, so anyone who found the URL could post a fake report or subscribe numbers. Africa's Talking doesn't sign its callbacks, so the secret goes in the callback URL entered in its dashboard (`?token=...`), and `ZamHealthWatchWeb.WebhookToken` refuses a missing or wrong one with `403`. The Community Health Toolkit, an open-source health platform, secures its Africa's Talking callbacks the same way. The comparison is constant-time, only the query string is read (never the posted form), and `token` is filtered out of request logs.
+- **Production fails closed.** If `WEBHOOK_TOKEN` isn't set in production, every webhook is refused and the refusal is logged, rather than the endpoints being silently open. Development and tests have no token configured, so `curl` testing still works locally.
+- **Token format: hex.** A base64 secret can contain `+` and `/`, and a `+` in a URL query is read as a space, the same trap Iteration 10 hit with phone numbers. The README gives an `elixir -e` one-liner for a 48-character hex token.
+- **Together with Iteration 21**, the SMS path now has two independent checks: the request must come from Africa's Talking (the token), and the sender must be a registered reporter (the phone number).
+
+**Built:**
+
+- [x] `SmsGateway.AfricasTalking.base_url_for/1`; `base_url` config from `AFRICAS_TALKING_BASE_URL`.
+- [x] `ZamHealthWatchWeb.WebhookToken` plug on the `/webhooks` scope; `:webhook_token` config (`WEBHOOK_TOKEN`, or `:missing` in production).
+- [x] `token` added to `:filter_parameters`; `render.yaml` and README document the new variables and the callback URLs.
+- [x] Tests: `AfricasTalkingTest` (sandbox, live, and override endpoints), `WebhookTokenTest` (right token accepted; missing, wrong, and form-body tokens refused with nothing done; USSD guarded too; production without a token refuses everything; no token configured lets requests through).
+
+**Status:** pending `mix test` verification, then a live test with the Africa's Talking simulator.
 
 ---

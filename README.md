@@ -54,7 +54,9 @@ The demo runs on **Render** (free web service, Docker) with **Neon** (free Postg
 - On the free plan the service sleeps after 15 minutes without traffic, so the first visit after that takes about a minute to wake it.
 - With `DEMO_RESET_ON_BOOT=true`, every boot also wipes the demo activity (cases, lab tests, stock, capacity, coverage, alert subscribers) and reseeds it dated from that moment. Each visitor after an idle spell gets the same fresh demo, and the risk trend stays current because the free instance restarts whenever it has been idle. Accounts, districts, and facilities are kept. Never set it on a database holding real data.
 
-Required environment variables: `DATABASE_URL` (Neon's direct connection string, not the `-pooler` one), `SECRET_KEY_BASE` (from `mix phx.gen.secret`), and `DATABASE_SSL=true`. The public demo also sets `DEMO_RESET_ON_BOOT=true`. Africa's Talking credentials (`AFRICAS_TALKING_USERNAME`, `AFRICAS_TALKING_API_KEY`) are optional; without them SMS is only logged.
+Required environment variables: `DATABASE_URL` (Neon's direct connection string, not the `-pooler` one), `SECRET_KEY_BASE` (from `mix phx.gen.secret`), and `DATABASE_SSL=true`. The public demo also sets `DEMO_RESET_ON_BOOT=true`. Africa's Talking credentials (`AFRICAS_TALKING_USERNAME`, `AFRICAS_TALKING_API_KEY`) are optional; without them SMS is only logged. The username `sandbox` uses Africa's Talking's sandbox API.
+
+SMS and USSD webhooks need `WEBHOOK_TOKEN`, a shared secret, which goes in the callback URLs set in the Africa's Talking dashboard: `https://<host>/webhooks/sms?token=<token>` and `https://<host>/webhooks/ussd?token=<token>`. Without it, production refuses every webhook. Generate a hex token, since `+` and `/` would be mangled in a URL: `elixir -e "IO.puts Base.encode16(:crypto.strong_rand_bytes(24), case: :lower)"`. Only phone numbers registered to an account on `/admin/users` can report cases by SMS or USSD.
 
 ## Docs
 

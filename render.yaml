@@ -33,3 +33,15 @@ services:
       # holding real data.
       - key: DEMO_RESET_ON_BOOT
         value: "true"
+      # Africa's Talking (Iteration 22). Entered in the dashboard, never
+      # committed. Username `sandbox` uses the sandbox API.
+      - key: AFRICAS_TALKING_USERNAME
+        sync: false
+      - key: AFRICAS_TALKING_API_KEY
+        sync: false
+      # The secret Africa's Talking's callback URLs must carry:
+      # /webhooks/sms?token=<it> and /webhooks/ussd?token=<it>. Without
+      # it, every webhook is refused. Use hex, since + and / in a URL
+      # query would be mangled.
+      - key: WEBHOOK_TOKEN
+        sync: false
