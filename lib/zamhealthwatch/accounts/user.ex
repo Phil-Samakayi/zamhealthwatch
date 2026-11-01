@@ -132,23 +132,45 @@ defmodule ZamHealthWatch.Accounts.User do
   here. `facility_id` is checked against `Geography.Facility` via
   `foreign_key_constraint/2` rather than by reaching into that schema
   directly, keeping the two contexts decoupled per the Iteration 0 design.
+
+  `phone` (Iteration 21) is the number this user may report cases from
+  by SMS or USSD - only registered numbers can. It must be in
+  international format (`+260971234567`), the form Africa's Talking
+  sends as the sender, so the two match exactly. Optional; an empty
+  value clears it, and one number can belong to one user only.
   """
   def role_changeset(user, attrs) do
     user
-    |> cast(attrs, [:role, :facility_id])
+    |> cast(attrs, [:role, :facility_id, :phone])
+    |> update_change(:phone, &trim_phone/1)
     |> validate_required([:role])
+    |> validate_format(:phone, ~r/^\+[1-9]\d{7,14}$/,
+      message: "must be in international format, e.g. +260971234567"
+    )
+    |> unique_constraint(:phone, message: "is already registered to another user")
     |> foreign_key_constraint(:facility_id)
   end
 
+  # An empty value is already cast to a `nil` change (clearing the
+  # number), so `nil` passes through; spaces alone also clear it.
+  defp trim_phone(nil), do: nil
+
+  defp trim_phone(phone) do
+    case String.trim(phone) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
   @doc """
-  A user changeset for an SMS-only reporter - a user identified by a
-  phone number instead of email/password, created the first time that
-  number reports a case over SMS (see
-  `Accounts.find_or_create_sms_reporter/1`). Deliberately separate from
-  `email_changeset/3`, same "one changeset per distinct operation"
-  discipline as `role_changeset/2` and `CaseManagement.Case`'s
-  `changeset/2` vs `status_changeset/2` - an SMS reporter never goes
-  through email registration, so there's no shared form here to reuse.
+  A user changeset for an SMS-only user - one identified by a phone
+  number instead of email/password.
+
+  Before Iteration 21, SMS reporting created one of these, with no role,
+  for every unknown number that texted a report. It no longer creates
+  any: only numbers registered to a user with a role can report (see
+  `role_changeset/2`). Users created that way before still exist, and
+  are still shown by their phone number.
   """
   def sms_reporter_changeset(user, attrs) do
     user

@@ -62,6 +62,32 @@ defmodule ZamHealthWatch.AccountsFixtures do
     user
   end
 
+  @doc """
+  Registers `phone` as the number `user` reports from by SMS/USSD
+  (Iteration 21). The user needs a role first - see `set_role/3`.
+  """
+  def set_phone(user, phone) do
+    {:ok, user} =
+      Accounts.assign_user_role(user, %{
+        role: user.role,
+        facility_id: user.facility_id,
+        phone: phone
+      })
+
+    user
+  end
+
+  @doc """
+  A user identified by phone alone, with no email or role - the kind
+  SMS reporting created for unknown numbers before Iteration 21. Still
+  needed to test how existing ones are displayed.
+  """
+  def phone_only_user_fixture(phone) do
+    %ZamHealthWatch.Accounts.User{}
+    |> ZamHealthWatch.Accounts.User.sms_reporter_changeset(%{phone: phone})
+    |> ZamHealthWatch.Repo.insert!()
+  end
+
   def extract_user_token(fun) do
     {:ok, captured_email} = fun.(&"[TOKEN]#{&1}[TOKEN]")
     [_, token | _] = String.split(captured_email.text_body, "[TOKEN]")

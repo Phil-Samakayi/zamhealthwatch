@@ -148,6 +148,59 @@ defmodule ZamHealthWatch.AccountsTest do
 
       assert %{facility_id: ["does not exist"]} = errors_on(changeset)
     end
+
+    test "registers an SMS phone number, trimmed" do
+      user = user_fixture()
+
+      assert {:ok, user} =
+               Accounts.assign_user_role(user, %{role: :health_worker, phone: " +260975550001 "})
+
+      assert user.phone == "+260975550001"
+    end
+
+    test "rejects a phone number that isn't in international format" do
+      user = user_fixture()
+
+      for phone <- ["0975550001", "+26097", "260975550001", "+260 97 555 0001"] do
+        assert {:error, changeset} =
+                 Accounts.assign_user_role(user, %{role: :health_worker, phone: phone})
+
+        assert %{phone: ["must be in international format, e.g. +260971234567"]} =
+                 errors_on(changeset)
+      end
+    end
+
+    test "rejects a phone number already registered to another user" do
+      user_fixture() |> set_role(:health_worker) |> set_phone("+260975550002")
+
+      assert {:error, changeset} =
+               Accounts.assign_user_role(user_fixture(), %{
+                 role: :health_worker,
+                 phone: "+260975550002"
+               })
+
+      assert %{phone: ["is already registered to another user"]} = errors_on(changeset)
+    end
+
+    test "clears a phone number given an empty value" do
+      user = user_fixture() |> set_role(:health_worker) |> set_phone("+260975550003")
+
+      assert {:ok, user} = Accounts.assign_user_role(user, %{role: :health_worker, phone: ""})
+      assert user.phone == nil
+    end
+  end
+
+  describe "get_user_by_phone/1" do
+    test "returns the user a number is registered to, ignoring surrounding whitespace" do
+      user = user_fixture() |> set_role(:health_worker) |> set_phone("+260975550004")
+
+      assert Accounts.get_user_by_phone("+260975550004").id == user.id
+      assert Accounts.get_user_by_phone(" +260975550004 ").id == user.id
+    end
+
+    test "returns nil for an unregistered number" do
+      refute Accounts.get_user_by_phone("+260975550099")
+    end
   end
 
   describe "sudo_mode?/2" do
