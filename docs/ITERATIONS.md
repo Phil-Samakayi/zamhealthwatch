@@ -978,6 +978,28 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 - [x] `token` added to `:filter_parameters`; `render.yaml` and README document the new variables and the callback URLs.
 - [x] Tests: `AfricasTalkingTest` (sandbox, live, and override endpoints), `WebhookTokenTest` (right token accepted; missing, wrong, and form-body tokens refused with nothing done; USSD guarded too; production without a token refuses everything; no token configured lets requests through).
 
-**Status:** pending `mix test` verification, then a live test with the Africa's Talking simulator.
+**Status:** live-verified: a USSD session from the Africa's Talking sandbox simulator reached the deployed app through the token-guarded callback, and unsubscribing worked end to end. `mix test` result still to be recorded.
+
+---
+
+## Iteration 23 — Telling people their subscription status
+
+**Goal:** a fix from the first live sandbox test. SUBSCRIBE from a number already on the alert list got "You're subscribed", and STOP from a number not on it got "You've been unsubscribed". Neither was true; nothing had changed. The project owner asked for both to say what actually happened.
+
+**Decisions:**
+
+- **`PublicAlerts.opt_in/1` and `opt_out/1` say what happened:** `:subscribed` or `:already_subscribed`, and `:unsubscribed` or `:not_subscribed`. `subscribe/1` and `unsubscribe/1` keep their existing return values for the code that only needs the write (fixtures, the demo).
+- **The answer comes from the write itself, not a lookup beforehand.** "Already subscribed" is the unique constraint firing on insert, and "not subscribed" is a delete that removed nothing. A check before the write could be passed by two simultaneous messages from the same number; the write can't.
+- **Only the unique constraint means "already subscribed".** The old duplicate handling treated *any* error on `phone` as a duplicate, so a blank number would have crashed looking itself up. That's now a plain `{:error, changeset}`.
+- **STOP now trims the number,** the same way SUBSCRIBE already did before storing it, so a padded number still finds its subscription.
+- **Replies stay per channel.** SMS replies name the keyword to send next ("Reply STOP to unsubscribe", "Reply SUBSCRIBE to opt in"), and USSD replies don't, since a USSD user picks from a menu instead.
+
+**Built:**
+
+- [x] `PublicAlerts.opt_in/1`, `opt_out/1`; `subscribe/1` and `unsubscribe/1` rebuilt on them.
+- [x] New SMS and USSD replies for "already subscribed" and "not subscribed".
+- [x] Tests: `PublicAlertsTest` (both outcomes of each, blank number is an error, STOP trims, SMS replies for both new cases), `UssdReportingTest` (both new replies).
+
+**Status:** pending `mix test` verification.
 
 ---
