@@ -873,3 +873,36 @@ Open follow-ups: re-dating the demo cases on boot so `/risk` doesn't drift to "N
 **Status:** 604 tests, 0 failures, first run. Migration applied cleanly. Closed.
 
 ---
+
+## Iteration 19 — Drug shortages linked to outbreaks
+
+**Goal:** tell an emergency shortage from a routine restock. `/drugs` flags any medicine below its reorder level, and `/risk` shows outbreaks, but nothing connected them. Artemether-lumefantrine short at a clinic with no malaria can wait for the next delivery. ORS short at a clinic in a cholera outbreak can't.
+
+**Decisions:**
+
+- **A medicine-to-disease map, limited to the five medicines tracked** (`PredictiveAnalytics.@medicines_for`), checked against clinical guidance:
+  - Cholera: ORS and IV fluids (Ringer's lactate). Rehydration is the treatment: ORS for mild or moderate dehydration, Ringer's lactate IV for severe. Antibiotics are only for severe cases, and the first-line ones (doxycycline, azithromycin) aren't tracked. Ciprofloxacin is deliberately left out because of reduced susceptibility.
+  - Malaria: artemether-lumefantrine, first-line for uncomplicated malaria.
+  - Typhoid: ciprofloxacin and ceftriaxone, both among WHO's recommended options, with local resistance deciding between them.
+  - Measles and COVID-19: no tracked medicine, so never an alert. Nothing invented to fill the gap.
+- **The rule:** a supply alert when a facility has had cases of a disease in the last four weeks (the same window as risk) and a medicine for that disease is below its reorder level. Each alert carries the disease's four-week trend at that facility, and alerts sort worst trend first.
+- **Latest stock wins,** per facility and medicine (`DrugAvailability.latest_stock_by_facility_and_medicine/0`), so a restock clears an alert. A medicine a facility has never reported isn't assumed to be short.
+- **Shown on `/risk`** (a "Supply alerts" table between the district and facility tables) and **on `/drugs`** (a banner, limited to the health worker's own facility). Both update live on new stock records and new or reclassified cases.
+- **Fixed on the way: live stock scoping on `/drugs`,** the same bug Iteration 18 fixed on `/cases`. A health worker's list picked up other facilities' submissions live until a reload.
+- **Demo:** Kabwata Clinic's cholera outbreak raises alerts for ORS (40 / 100) and IV fluids (15 / 30), and UTH's typhoid case for ceftriaxone (20 / 50). Monze's artemether-lumefantrine shortage (30 / 60) stays quiet: its only malaria case is six weeks old. That's the routine restock the rule exists to tell apart.
+
+**Known follow-ups, not fixed here:**
+
+- The same live-scoping bug exists on `/hospital`, `/labs`, and `/vaccinations`: each one's `handle_info({:created, _})` streams in every broadcast record. Checked, not yet fixed. One small pass with a test each.
+- National Reporting's "Drug stock shortages" count is taken over every stock record a facility ever submitted, not its latest per medicine, so a shortage that has since been restocked still counts. `latest_stock_by_facility_and_medicine/0` is the fix.
+
+**Built:**
+
+- [x] `DrugAvailability.latest_stock_by_facility_and_medicine/0`.
+- [x] `PredictiveAnalytics.list_supply_alerts/1`, `medicines_for/1`, `SupplyAlert` struct; shared `facility_disease_buckets/1`.
+- [x] `RiskLive.Index` supply alerts table (`#supply-alerts`); `DrugLive.Index` banner (`#supply-alerts`) and live scoping fix.
+- [x] Tests: `DrugAvailabilityTest` (latest per facility and medicine), `PredictiveAnalyticsTest` (alert fields and trend, in stock, no recent cases, unrelated medicine and measles, restock clears it, shortage at another facility, sort order), `RiskLive.IndexTest` (alert row, live alert on a new shortage), `DrugLive.IndexTest` (health worker sees only their facility's alert, no banner without one, live alert from a new case, live list scoping), `DemoTest` (the three demo alerts, Monze quiet).
+
+**Status:** pending `mix test` verification.
+
+---
