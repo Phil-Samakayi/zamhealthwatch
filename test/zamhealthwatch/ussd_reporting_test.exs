@@ -112,10 +112,11 @@ defmodule ZamHealthWatch.UssdReportingTest do
       assert PublicAlerts.list_subscriber_phones() == [@phone]
     end
 
-    test "is idempotent, same as the SMS SUBSCRIBE keyword" do
-      UssdReporting.handle_session(@phone, "2")
+    test "tells a number that's already subscribed, without a duplicate" do
       UssdReporting.handle_session(@phone, "2")
 
+      assert {:end, message} = UssdReporting.handle_session(@phone, "2")
+      assert message =~ "already subscribed"
       assert PublicAlerts.list_subscriber_phones() == [@phone]
     end
   end
@@ -130,8 +131,10 @@ defmodule ZamHealthWatch.UssdReportingTest do
       assert PublicAlerts.list_subscriber_phones() == []
     end
 
-    test "is a no-op, without erroring, for a number that was never subscribed" do
-      assert {:end, _message} = UssdReporting.handle_session(@phone, "3")
+    test "tells a number that was never subscribed that it isn't" do
+      assert {:end, message} = UssdReporting.handle_session(@phone, "3")
+      assert message =~ "aren't subscribed"
+      refute message =~ "You've been unsubscribed"
       assert PublicAlerts.list_subscriber_phones() == []
     end
   end

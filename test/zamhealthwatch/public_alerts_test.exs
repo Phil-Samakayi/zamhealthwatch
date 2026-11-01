@@ -54,6 +54,33 @@ defmodule ZamHealthWatch.PublicAlertsTest do
     end
   end
 
+  describe "opt_in/1 and opt_out/1" do
+    test "opt_in says whether the number was already subscribed" do
+      assert PublicAlerts.opt_in("+260971234567") == :subscribed
+      assert PublicAlerts.opt_in("+260971234567") == :already_subscribed
+      assert PublicAlerts.opt_in(" +260971234567 ") == :already_subscribed
+      assert PublicAlerts.list_subscriber_phones() == ["+260971234567"]
+    end
+
+    test "opt_in returns an error for a blank number, not \"already subscribed\"" do
+      assert {:error, %Ecto.Changeset{}} = PublicAlerts.opt_in("   ")
+    end
+
+    test "opt_out says whether the number was subscribed" do
+      alert_subscriber_fixture(%{phone: "+260971234567"})
+
+      assert PublicAlerts.opt_out("+260971234567") == :unsubscribed
+      assert PublicAlerts.opt_out("+260971234567") == :not_subscribed
+      assert PublicAlerts.list_subscriber_phones() == []
+    end
+
+    test "opt_out trims the number, as subscribing does" do
+      alert_subscriber_fixture(%{phone: "+260971234567"})
+
+      assert PublicAlerts.opt_out(" +260971234567 ") == :unsubscribed
+    end
+  end
+
   describe "list_subscriber_phones/0" do
     test "returns every subscribed phone number" do
       alert_subscriber_fixture(%{phone: "+260971111111"})
@@ -87,6 +114,18 @@ defmodule ZamHealthWatch.PublicAlertsTest do
       assert log =~ "subscribed"
     end
 
+    test "SUBSCRIBE from a number that's already subscribed says so" do
+      alert_subscriber_fixture(%{phone: "+260971234567"})
+
+      log =
+        capture_log(fn ->
+          assert :handled = PublicAlerts.handle_inbound_sms("+260971234567", "SUBSCRIBE")
+        end)
+
+      assert log =~ "already subscribed"
+      assert PublicAlerts.list_subscriber_phones() == ["+260971234567"]
+    end
+
     test "is case-insensitive and tolerates surrounding whitespace" do
       capture_log(fn ->
         assert :handled = PublicAlerts.handle_inbound_sms("+260971234567", "  subscribe  ")
@@ -107,11 +146,14 @@ defmodule ZamHealthWatch.PublicAlertsTest do
       assert log =~ "unsubscribed"
     end
 
-    test "STOP from a number that was never subscribed still replies, without erroring" do
-      capture_log(fn ->
-        assert :handled = PublicAlerts.handle_inbound_sms("+260971234567", "STOP")
-      end)
+    test "STOP from a number that was never subscribed says it isn't subscribed" do
+      log =
+        capture_log(fn ->
+          assert :handled = PublicAlerts.handle_inbound_sms("+260971234567", "STOP")
+        end)
 
+      assert log =~ "aren't subscribed"
+      refute log =~ "You've been unsubscribed"
       assert PublicAlerts.list_subscriber_phones() == []
     end
 

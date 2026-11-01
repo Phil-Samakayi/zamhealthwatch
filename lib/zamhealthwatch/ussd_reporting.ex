@@ -79,6 +79,8 @@ defmodule ZamHealthWatch.UssdReporting do
 
   @subscribe_reply "You're subscribed to ZamHealthWatch public health alerts."
   @unsubscribe_reply "You've been unsubscribed from ZamHealthWatch public health alerts."
+  @already_subscribed_reply "You're already subscribed to ZamHealthWatch public health alerts."
+  @not_subscribed_reply "You aren't subscribed to ZamHealthWatch public health alerts, so there's nothing to unsubscribe from."
 
   @doc """
   Handles one step of a USSD session.
@@ -141,14 +143,20 @@ defmodule ZamHealthWatch.UssdReporting do
     end
   end
 
+  # Tells someone already on the list, or not on it, rather than
+  # confirming a change that didn't happen (Iteration 23).
   defp route(["2"], phone) do
-    {:ok, _subscriber} = PublicAlerts.subscribe(phone)
-    {:end, @subscribe_reply}
+    case PublicAlerts.opt_in(phone) do
+      :subscribed -> {:end, @subscribe_reply}
+      :already_subscribed -> {:end, @already_subscribed_reply}
+    end
   end
 
   defp route(["3"], phone) do
-    :ok = PublicAlerts.unsubscribe(phone)
-    {:end, @unsubscribe_reply}
+    case PublicAlerts.opt_out(phone) do
+      :unsubscribed -> {:end, @unsubscribe_reply}
+      :not_subscribed -> {:end, @not_subscribed_reply}
+    end
   end
 
   defp route(_other, _phone), do: {:end, @invalid_selection}

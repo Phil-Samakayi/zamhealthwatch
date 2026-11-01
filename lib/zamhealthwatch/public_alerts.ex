@@ -41,6 +41,8 @@ defmodule ZamHealthWatch.PublicAlerts do
 
   @subscribe_reply "You're subscribed to ZamHealthWatch public health alerts. Reply STOP to unsubscribe at any time."
   @unsubscribe_reply "You've been unsubscribed from ZamHealthWatch public health alerts. Reply SUBSCRIBE to opt back in."
+  @already_subscribed_reply "You're already subscribed to ZamHealthWatch public health alerts. Reply STOP to unsubscribe."
+  @not_subscribed_reply "You aren't subscribed to ZamHealthWatch public health alerts. Reply SUBSCRIBE to opt in."
 
   @doc """
   Returns the list of every subscribed phone number.
@@ -85,18 +87,52 @@ defmodule ZamHealthWatch.PublicAlerts do
 
   """
   def subscribe(phone) when is_binary(phone) do
+    case insert_subscriber(phone) do
+      {:error, changeset} -> {:error, changeset}
+      {_new_or_existing, subscriber} -> {:ok, subscriber}
+    end
+  end
+
+  @doc """
+  Subscribes a phone number, saying whether it was already subscribed
+  (Iteration 23): `:subscribed` or `:already_subscribed`. Same idempotent
+  write as `subscribe/1`; the SMS and USSD replies use the answer to
+  tell someone who's already on the list that they are, instead of
+  confirming a subscription that didn't change anything.
+  """
+  def opt_in(phone) when is_binary(phone) do
+    case insert_subscriber(phone) do
+      {:error, changeset} -> {:error, changeset}
+      {status, _subscriber} -> status
+    end
+  end
+
+  # The answer comes from the insert itself - a new row, or the unique
+  # constraint saying the number is already there - not from a lookup
+  # beforehand, which two simultaneous SUBSCRIBEs could both pass. Only
+  # the unique constraint means "already subscribed"; any other phone
+  # error (a blank number, say) is a real error.
+  defp insert_subscriber(phone) do
     changeset = %AlertSubscriber{} |> AlertSubscriber.changeset(%{phone: phone})
 
     case Repo.insert(changeset) do
       {:ok, subscriber} ->
-        {:ok, subscriber}
+        {:subscribed, subscriber}
 
       {:error, changeset} ->
-        if Keyword.has_key?(changeset.errors, :phone) do
-          {:ok, Repo.get_by!(AlertSubscriber, phone: Ecto.Changeset.get_field(changeset, :phone))}
+        if already_subscribed?(changeset) do
+          trimmed = Ecto.Changeset.get_field(changeset, :phone)
+          {:already_subscribed, Repo.get_by!(AlertSubscriber, phone: trimmed)}
         else
           {:error, changeset}
         end
+    end
+  end
+
+  defp already_subscribed?(changeset) do
+    case Keyword.get(changeset.errors, :phone) do
+      {_message, opts} -> opts[:constraint] == :unique
+      nil -> false
     end
   end
 
@@ -114,8 +150,23 @@ defmodule ZamHealthWatch.PublicAlerts do
 
   """
   def unsubscribe(phone) when is_binary(phone) do
-    Repo.delete_all(from s in AlertSubscriber, where: s.phone == ^phone)
+    _status = opt_out(phone)
     :ok
+  end
+
+  @doc """
+  Unsubscribes a phone number, saying whether it was subscribed
+  (Iteration 23): `:unsubscribed` or `:not_subscribed`. The number is
+  trimmed first, the same way `subscribe/1` trims it before storing it,
+  so a padded STOP still finds the subscription.
+  """
+  def opt_out(phone) when is_binary(phone) do
+    trimmed = String.trim(phone)
+
+    case Repo.delete_all(from s in AlertSubscriber, where: s.phone == ^trimmed) do
+      {0, _} -> :not_subscribed
+      {_deleted, _} -> :unsubscribed
+    end
   end
 
   @doc """
@@ -143,13 +194,23 @@ defmodule ZamHealthWatch.PublicAlerts do
   def handle_inbound_sms(from, text) when is_binary(from) and is_binary(text) do
     case text |> String.trim() |> String.upcase() do
       @subscribe_keyword ->
-        {:ok, _subscriber} = subscribe(from)
-        SmsGateway.send_sms(from, @subscribe_reply)
+        reply =
+          case opt_in(from) do
+            :subscribed -> @subscribe_reply
+            :already_subscribed -> @already_subscribed_reply
+          end
+
+        SmsGateway.send_sms(from, reply)
         :handled
 
       @unsubscribe_keyword ->
-        :ok = unsubscribe(from)
-        SmsGateway.send_sms(from, @unsubscribe_reply)
+        reply =
+          case opt_out(from) do
+            :unsubscribed -> @unsubscribe_reply
+            :not_subscribed -> @not_subscribed_reply
+          end
+
+        SmsGateway.send_sms(from, reply)
         :handled
 
       _ ->
