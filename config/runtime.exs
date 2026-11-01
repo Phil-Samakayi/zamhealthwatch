@@ -137,6 +137,11 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
+  # The shared secret inbound SMS/USSD webhooks must carry in their URL
+  # (Iteration 22 - see ZamHealthWatchWeb.WebhookToken). Without one,
+  # production refuses every webhook rather than leaving them open.
+  config :zamhealthwatch, :webhook_token, System.get_env("WEBHOOK_TOKEN") || :missing
+
   # Real Africa's Talking SMS delivery, only when both credentials are
   # present - unlike DATABASE_URL/SECRET_KEY_BASE above, a missing SMS
   # provider doesn't `raise` here. SMS/USSD alerts and reply confirmations
@@ -151,10 +156,14 @@ if config_env() == :prod do
   if at_username && at_api_key do
     config :zamhealthwatch, :sms_gateway, ZamHealthWatch.SmsGateway.AfricasTalking
 
+    # The username picks the endpoint: `sandbox` uses Africa's Talking's
+    # sandbox API, anything else the live one (Iteration 22).
+    # AFRICAS_TALKING_BASE_URL overrides that if ever needed.
     config :zamhealthwatch, ZamHealthWatch.SmsGateway.AfricasTalking,
       username: at_username,
       api_key: at_api_key,
-      sender_id: System.get_env("AFRICAS_TALKING_SENDER_ID")
+      sender_id: System.get_env("AFRICAS_TALKING_SENDER_ID"),
+      base_url: System.get_env("AFRICAS_TALKING_BASE_URL")
   else
     require Logger
 

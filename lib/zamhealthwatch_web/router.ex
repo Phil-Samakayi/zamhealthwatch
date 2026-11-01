@@ -17,11 +17,17 @@ defmodule ZamHealthWatchWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Since Iteration 22, inbound webhooks must carry the shared secret
+  # from WEBHOOK_TOKEN in their URL - see ZamHealthWatchWeb.WebhookToken.
+  pipeline :webhook_token do
+    plug ZamHealthWatchWeb.WebhookToken
+  end
+
   # Inbound SMS/USSD webhooks - no browser session, no CSRF token to
   # check (a webhook provider isn't a browser), so this deliberately
   # doesn't go through the :browser pipeline.
   scope "/webhooks", ZamHealthWatchWeb do
-    pipe_through :api
+    pipe_through [:api, :webhook_token]
 
     post "/sms", SmsWebhookController, :create
     post "/ussd", UssdWebhookController, :create
