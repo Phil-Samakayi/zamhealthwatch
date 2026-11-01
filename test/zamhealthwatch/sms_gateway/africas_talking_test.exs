@@ -57,6 +57,43 @@ defmodule ZamHealthWatch.SmsGateway.AfricasTalkingTest do
              AfricasTalking.send_sms("+260971234567", "hello")
   end
 
+  describe "which endpoint it calls (Iteration 22)" do
+    test "the sandbox username goes to the sandbox endpoint" do
+      assert_host("sandbox", nil, "api.sandbox.africastalking.com")
+    end
+
+    test "any other username goes to the live endpoint" do
+      assert_host("zamhealthwatch", nil, "api.africastalking.com")
+    end
+
+    test "a configured base URL overrides both" do
+      assert_host("sandbox", "https://sms.example.test", "sms.example.test")
+    end
+  end
+
+  # Sends one SMS with `username` (and `base_url`, if given) configured,
+  # and asserts the request went to `expected_host`. Req.Test runs the
+  # stub in this test's own process, so it can message the test directly.
+  defp assert_host(username, base_url, expected_host) do
+    config = [username: username, api_key: "fake-key"]
+    config = if base_url, do: Keyword.put(config, :base_url, base_url), else: config
+    Application.put_env(:zamhealthwatch, AfricasTalking, config)
+    test_pid = self()
+
+    Req.Test.stub(AfricasTalking, fn conn ->
+      send(test_pid, {:host, conn.host, conn.request_path})
+
+      Req.Test.json(conn, %{
+        "SMSMessageData" => %{
+          "Recipients" => [%{"number" => "+260971234567", "status" => "Success"}]
+        }
+      })
+    end)
+
+    assert :ok = AfricasTalking.send_sms("+260971234567", "hello")
+    assert_received {:host, ^expected_host, "/version1/messaging"}
+  end
+
   test "raises when username/api_key aren't configured" do
     Application.delete_env(:zamhealthwatch, AfricasTalking)
 

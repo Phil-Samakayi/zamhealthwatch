@@ -31,6 +31,14 @@ defmodule ZamHealthWatch.SmsGateway.AfricasTalking do
   own moduledocs) - this is the first place to look if a real send
   comes back an unexpected `{:error, ...}`.
 
+  **Sandbox (Iteration 22).** Africa's Talking's sandbox has its own
+  endpoint, `https://api.sandbox.africastalking.com`, and its username
+  is always `sandbox`. Sandbox credentials are rejected by the live
+  endpoint, so the base URL follows the username: `sandbox` goes to the
+  sandbox endpoint, anything else to the live one. A `:base_url` in
+  config (from `AFRICAS_TALKING_BASE_URL`) overrides both. Endpoints
+  checked against Africa's Talking's help centre.
+
   Request options are built through `Keyword.merge/2` with
   `Application.get_env(:zamhealthwatch, :sms_gateway_req_options, [])`
   spliced in before the real ones - empty everywhere except `:test`
@@ -48,7 +56,7 @@ defmodule ZamHealthWatch.SmsGateway.AfricasTalking do
     username = Keyword.fetch!(config, :username)
     api_key = Keyword.fetch!(config, :api_key)
     sender_id = Keyword.get(config, :sender_id)
-    base_url = Keyword.get(config, :base_url, "https://api.africastalking.com")
+    base_url = Keyword.get(config, :base_url) || base_url_for(username)
 
     form = build_form(username, to, text, sender_id)
 
@@ -63,6 +71,13 @@ defmodule ZamHealthWatch.SmsGateway.AfricasTalking do
     |> Req.post(req_options)
     |> handle_response()
   end
+
+  @doc """
+  The API base URL for an Africa's Talking `username`: the sandbox
+  endpoint for the sandbox account, the live one for any other.
+  """
+  def base_url_for("sandbox"), do: "https://api.sandbox.africastalking.com"
+  def base_url_for(_username), do: "https://api.africastalking.com"
 
   defp build_form(username, to, text, nil) do
     [username: username, to: to, message: text]
